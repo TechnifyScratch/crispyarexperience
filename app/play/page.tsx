@@ -1,7 +1,7 @@
 import { ArHunt } from "@/components/ar-hunt";
+import { AnonymousEntry } from "@/components/anonymous-entry";
 import Link from "next/link";
 import { Clock3, IceCreamBowl } from "lucide-react";
-import { redirect } from "next/navigation";
 import { arConfigured, supabaseConfigured } from "@/lib/config";
 import { createServerSupabase } from "@/lib/supabase/server";
 import type { ImagePlacement } from "@/lib/ar/mindar-provider";
@@ -11,7 +11,7 @@ export default async function PlayPage() {
 
   const supabase = await createServerSupabase();
   const { data: auth } = await supabase!.auth.getUser();
-  if (!auth.user) redirect("/login?next=/play");
+  if (!auth.user) return <AnonymousEntry />;
 
   const { data: hunt, error } = await supabase!.rpc("current_hunt", { p_venue_slug: "crispy-cones" });
   if (error || !hunt?.active) {

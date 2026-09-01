@@ -13,7 +13,7 @@ export default function HomePage() {
           <p>My name is Crispy Craig, and I seem to have gotten lost…</p>
           <p>If you can find me in the store, I’ll have a surprise waiting for you when you place your order!</p>
         </div>
-        <Link className="intro-start" href="/login?next=/play">Start Searching!</Link>
+        <Link className="intro-start" href="/play">Start Searching!</Link>
       </section>
     </main>
   );

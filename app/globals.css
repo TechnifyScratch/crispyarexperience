@@ -526,3 +526,40 @@ h1 { margin: 0; font-family: Georgia, 'Times New Roman', serif; font-size: clamp
   .ar-page { grid-template-rows: 62px minmax(0, 1fr) 96px; }
   .ar-page > .capture-button { height: 68px; }
 }
+
+.guest-entry {
+  width: 100%;
+  min-height: 100svh;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 18px;
+  color: white;
+  background: #000;
+  font-family: var(--player-sans);
+}
+.guest-entry > img { width: 180px; height: auto; margin-bottom: 24px; }
+.guest-entry > svg { color: rgba(255,255,255,.7); }
+.guest-entry p { margin: 0; color: rgba(255,255,255,.58); font-size: 13px; }
+.guest-entry button { min-width: 150px; height: 50px; border: 0; border-radius: 9px; color: #000; background: white; font: 700 14px var(--player-sans); }
+
+.staff-login-page {
+  min-height: 100svh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  color: white;
+  background: #000;
+  font-family: var(--player-sans);
+}
+.staff-login-page > section { width: min(100%, 420px); }
+.staff-login-page img { width: 170px; height: auto; display: block; margin: 0 auto 64px; }
+.staff-login-page .eyebrow { color: rgba(255,255,255,.5); }
+.staff-login-page h1 { color: white; font-family: var(--player-display); font-size: clamp(44px, 11vw, 58px); font-weight: 400; letter-spacing: -.04em; }
+.staff-login-form { margin: 38px 0 26px; display: grid; gap: 10px; }
+.staff-login-form label { margin-top: 8px; color: rgba(255,255,255,.58); font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
+.staff-login-form input { height: 54px; padding: 0 2px; border: 0; border-bottom: 1px solid rgba(255,255,255,.4); outline: 0; color: white; background: transparent; font: 18px var(--player-sans); }
+.staff-login-form input:focus { border-color: white; }
+.staff-login-form button { height: 56px; margin-top: 20px; display: grid; place-items: center; border: 0; border-radius: 9px; color: #000; background: white; font: 700 14px var(--player-sans); }
+.staff-login-form button:disabled { opacity: .6; }
+.staff-login-page > section > a { color: rgba(255,255,255,.52); font-size: 12px; }

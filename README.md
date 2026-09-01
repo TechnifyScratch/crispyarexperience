@@ -1,10 +1,10 @@
 # Crispy Craig AR Hunt
 
-A mobile-only, in-store augmented-reality hunt for Crispy Cones. Guests see the intro, sign in by phone, search through their rear camera, and take a private capture to show an employee.
+A mobile-only, in-store augmented-reality hunt for Crispy Cones. Guests tap once to enter with an invisible anonymous session, search through their rear camera, and take a private capture to show an employee.
 
 ## Included
 
-- Reference-matched mobile intro, phone OTP, timed camera, and capture flow
+- Reference-matched mobile intro, zero-form guest entry, timed camera, and capture flow
 - Free, self-hosted MindAR image tracking with no visible QR codes or floor markers
 - Optimized Craig GLB plus an exact 2D Craig intro asset
 - Supabase roles, row-level security, weekly schedules, date exceptions, placements, sessions, and audit records
@@ -18,10 +18,10 @@ Without Supabase values, the app runs in a local preview flow. Without a compile
 1. Run `npm install`.
 2. Copy `.env.example` to `.env.local` and add the Supabase values.
 3. Apply `supabase/migrations/202608310001_initial.sql` to the Supabase project.
-4. Enable Phone authentication in Supabase and configure an SMS provider.
+4. Enable Anonymous Sign-Ins in Supabase under Authentication settings.
 5. Run `npm run dev`.
 
-To create the first admin after that person signs in:
+Staff use email/password at `/staff-login`; guests never see this screen. Create the staff user in Supabase Authentication, then grant the admin role:
 
 ```sql
 update public.profiles set role = 'admin' where id = '<auth-user-id>';
