@@ -1,0 +1,5 @@
+import Link from "next/link";
+
+export default function PrivacyPage() {
+  return <main className="legal-page"><article><Link href="/">← Back to the hunt</Link><p className="eyebrow">Privacy</p><h1>Your camera stays yours.</h1><p>The Crispy Craig hunt uses your rear camera to display augmented reality. Camera frames are processed on your device and are not uploaded by default.</p><h2>Phone sign-in</h2><p>Your phone number is used for one-time-code authentication and participation limits. It is not sold or used for marketing without separate permission.</p><h2>Captures</h2><p>Captures remain on your device unless you choose to save or share them. Be mindful of other guests before taking a picture.</p><h2>Account deletion</h2><p>Contact the restaurant to request deletion of your account and participation records.</p></article></main>;
+}
