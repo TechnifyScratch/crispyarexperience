@@ -563,6 +563,7 @@ h1 { margin: 0; font-family: Georgia, 'Times New Roman', serif; font-size: clamp
 .staff-login-form button { height: 56px; margin-top: 20px; display: grid; place-items: center; border: 0; border-radius: 9px; color: #000; background: white; font: 700 14px var(--player-sans); }
 .staff-login-form button:disabled { opacity: .6; }
 .staff-login-page > section > a { color: rgba(255,255,255,.52); font-size: 12px; }
+.staff-login-note { margin-top: 14px; color: rgba(255,255,255,.58); font-size: 13px; }
 
 /* Plain, utility-first admin */
 .admin-shell {

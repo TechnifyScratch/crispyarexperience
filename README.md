@@ -21,10 +21,20 @@ Without Supabase values, the app runs in a local preview flow. Without a compile
 4. Enable Anonymous Sign-Ins in Supabase under Authentication settings.
 5. Run `npm run dev`.
 
-Staff use email/password at `/staff-login`; guests never see this screen. Create the staff user in Supabase Authentication, then grant the admin role:
+Staff use email/password at `/staff-login`; guests never see this screen. For invited staff, set the Supabase **Invite user** email template button URL to:
+
+```text
+{{ .SiteURL }}/auth/confirm?token_hash={{ .TokenHash }}&type=invite&next=/staff-set-password
+```
+
+Set Supabase Authentication's Site URL to the production website, send the invitation from Authentication → Users, then grant the invited user the admin role:
 
 ```sql
-update public.profiles set role = 'admin' where id = '<auth-user-id>';
+update public.profiles p
+set role = 'admin', updated_at = now()
+from auth.users u
+where p.id = u.id
+  and lower(u.email) in (lower('first@example.com'), lower('second@example.com'));
 ```
 
 ## Markerless-looking store setup

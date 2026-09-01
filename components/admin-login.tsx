@@ -13,6 +13,7 @@ export function AdminLogin() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const next = searchParams.get("next")?.startsWith("/admin") ? searchParams.get("next")! : "/admin";
+  const inviteError = searchParams.get("error") === "invite";
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
@@ -33,6 +34,7 @@ export function AdminLogin() {
       <input id="staff-email" type="email" autoComplete="email" required value={email} onChange={(event) => setEmail(event.target.value)} />
       <label htmlFor="staff-password">Password</label>
       <input id="staff-password" type="password" autoComplete="current-password" required value={password} onChange={(event) => setPassword(event.target.value)} />
+      {inviteError && !error && <p className="form-error" role="alert">That invitation link is invalid or has expired. Ask the account owner to send a new one.</p>}
       {error && <p className="form-error" role="alert">{error}</p>}
       <button type="submit" disabled={busy}>{busy ? <LoaderCircle className="spin" /> : "Sign in"}</button>
     </form>
