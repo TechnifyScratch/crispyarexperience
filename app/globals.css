@@ -666,6 +666,15 @@ h1 { margin: 0; font-family: Georgia, 'Times New Roman', serif; font-size: clamp
 .settings-form small { color: var(--admin-muted); }
 .settings-form input[type=checkbox] { width: 17px; height: 17px; accent-color: #222; }
 .settings-form textarea { min-height: 70px; padding: 9px; border-color: var(--admin-border); border-radius: 2px; }
+.placement-controls input[type=text],
+.placement-controls input[type=number],
+.placement-controls select,
+.exception-form input,
+.exception-form select { min-height: 34px; padding: 5px; border: 1px solid #777; background: #fff; color: #000; }
+.placement-checkbox { display: flex !important; grid-template-columns: auto 1fr !important; align-items: center; gap: 7px; }
+.ghost-craig { width: 110px; height: auto; border: 0; background: transparent; }
+.ghost-craig img { width: 100%; height: auto; display: block; }
+.exception-form { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 0 12px; border-bottom: 1px solid #aaa; }
 
 @media (max-width: 820px) {
   .admin-main { margin-left: 0; padding-bottom: 52px; }

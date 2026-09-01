@@ -4,11 +4,19 @@ import { useState } from "react";
 import { Check, Save } from "lucide-react";
 import { createBrowserSupabase } from "@/lib/supabase/browser";
 
-export function SettingsEditor() {
-  const [enabled, setEnabled] = useState(true);
-  const [watermark, setWatermark] = useState(true);
-  const [prize, setPrize] = useState("Show this capture when you order for a surprise!");
-  const [prompt, setPrompt] = useState("Look around slowly. Point toward walls, signs, and the counter.");
+type VenueSettings = {
+  id: string;
+  hunt_enabled: boolean;
+  capture_watermark: boolean;
+  prize_message: string;
+  localization_prompt: string;
+};
+
+export function SettingsEditor({ venue }: { venue: VenueSettings }) {
+  const [enabled, setEnabled] = useState(venue.hunt_enabled);
+  const [watermark, setWatermark] = useState(venue.capture_watermark);
+  const [prize, setPrize] = useState(venue.prize_message);
+  const [prompt, setPrompt] = useState(venue.localization_prompt);
   const [status, setStatus] = useState<"idle" | "saving" | "saved">("idle");
   const [error, setError] = useState("");
 
@@ -22,7 +30,7 @@ export function SettingsEditor() {
       capture_watermark: watermark,
       prize_message: prize,
       localization_prompt: prompt,
-    }).eq("slug", "crispy-cones");
+    }).eq("id", venue.id);
     if (saveError) { setError(saveError.message); setStatus("idle"); }
     else setStatus("saved");
   }

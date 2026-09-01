@@ -1,9 +1,11 @@
 import { redirect } from "next/navigation";
+import { connection } from "next/server";
 import { AdminShell } from "@/components/admin-shell";
 import { supabaseConfigured } from "@/lib/config";
 import { createServerSupabase } from "@/lib/supabase/server";
 
 export default async function AdminLayout({ children }: { children: React.ReactNode }) {
+  await connection();
   let previewMode = !supabaseConfigured;
   if (supabaseConfigured) {
     const supabase = await createServerSupabase();
