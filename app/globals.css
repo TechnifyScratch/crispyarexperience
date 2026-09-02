@@ -799,6 +799,9 @@ h1 { margin: 0; font-family: Georgia, 'Times New Roman', serif; font-size: clamp
 .scan-calibration { width: calc(100% - 24px); position: absolute; z-index: 4; left: 12px; bottom: 12px; padding: 12px; display: grid; gap: 5px; color: #fff; background: rgba(0,0,0,.78); font: 13px Arial, sans-serif; }
 .scan-calibration span { color: rgba(255,255,255,.72); font-size: 11px; }
 .scan-calibration button { width: fit-content; margin-top: 5px; }
+.scan-calibration.stop { color: #000; background: #fff; }
+.scan-calibration.stop span { color: #555; }
+.ghost-craig { transition: left .08s linear; }
 .placement-state { display: flex; align-items: center; gap: 5px; }
 .placement-disclosure { display: block; margin-top: 12px; color: #666; font: 11px/1.45 Arial, sans-serif; }
 .compass-button { position: absolute; z-index: 6; top: 14px; right: 14px; padding: 9px 11px; display: flex; align-items: center; gap: 6px; border: 1px solid rgba(255,255,255,.5); border-radius: 20px; color: #fff; background: rgba(0,0,0,.65); font: 700 11px var(--player-sans); }

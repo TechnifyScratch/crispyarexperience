@@ -10,7 +10,7 @@ import { cardinalDirection, readingFromEvent, requestOrientationPermission, sign
 
 type VenueMap = { id: string; version: number; provider: string; is_active: boolean; target_bundle_path: string };
 type Placement = { id: string; name: string; status: string; target_index: number; scale: number; updated_at: string; venue_map_id: string };
-type ScanStage = "idle" | "left" | "right" | "complete" | "compiling";
+type ScanStage = "idle" | "left" | "left-stop" | "right" | "right-stop" | "complete" | "compiling";
 
 export function AdminPlace({ venueId, userId, maps, placements, loadError }: {
   venueId: string;
@@ -31,6 +31,8 @@ export function AdminPlace({ venueId, userId, maps, placements, loadError }: {
   const [orientationAllowed, setOrientationAllowed] = useState<boolean | null>(null);
   const [reading, setReading] = useState<CompassReading | null>(null);
   const [scanStage, setScanStage] = useState<ScanStage>("idle");
+  const [scanDelta, setScanDelta] = useState(0);
+  const [scanDirection, setScanDirection] = useState(0);
   const [frames, setFrames] = useState<Blob[]>([]);
   const [compileProgress, setCompileProgress] = useState(0);
   const [saving, setSaving] = useState(false);
@@ -86,13 +88,15 @@ export function AdminPlace({ venueId, userId, maps, placements, loadError }: {
       centerHeadingRef.current = readingRef.current;
       startYawRef.current = readingRef.current?.relativeYaw ?? null;
       firstDirectionRef.current = 0;
+      setScanDelta(0);
+      setScanDirection(0);
       changeScanStage("left");
       setSaved(false);
       setError("");
     } catch (scanError) { setError(scanError instanceof Error ? scanError.message : "Could not begin the scan."); }
   }
 
-  const recordSide = useCallback(async (nextStage: "right" | "complete") => {
+  const recordSide = useCallback(async (nextStage: "left-stop" | "right-stop") => {
     if (captureLockRef.current) return;
     captureLockRef.current = true;
     try {
@@ -112,11 +116,17 @@ export function AdminPlace({ venueId, userId, maps, placements, loadError }: {
       const origin = startYawRef.current;
       if (origin == null || captureLockRef.current) return;
       const delta = signedAngleDifference(nextReading.relativeYaw, origin);
-      if (scanStageRef.current === "left" && Math.abs(delta) >= 25) {
+      setScanDelta(delta);
+      if (scanStageRef.current === "left" && firstDirectionRef.current === 0 && Math.abs(delta) >= 2) {
         firstDirectionRef.current = Math.sign(delta) || 1;
-        void recordSide("right");
-      } else if (scanStageRef.current === "right" && Math.sign(delta) === -firstDirectionRef.current && Math.abs(delta) >= 25) {
-        void recordSide("complete");
+        setScanDirection(firstDirectionRef.current);
+      }
+      if (scanStageRef.current === "left" && Math.abs(delta) >= 20) {
+        firstDirectionRef.current ||= Math.sign(delta) || 1;
+        setScanDirection(firstDirectionRef.current);
+        void recordSide("left-stop");
+      } else if (scanStageRef.current === "right" && Math.sign(delta) === -firstDirectionRef.current && Math.abs(delta) >= 20) {
+        void recordSide("right-stop");
       }
     };
     window.addEventListener("deviceorientation", handleOrientation, true);
@@ -165,7 +175,7 @@ export function AdminPlace({ venueId, userId, maps, placements, loadError }: {
           x: 0, y: height / 100, z: -(depth / 100), targetIndexes: [0, 1, 2],
           heading: compass?.isAbsolute ? Math.round(compass.heading) : null,
           headingAccuracy: compass?.isAbsolute ? compass.accuracy : null,
-          scanSpan: 50,
+          scanSpan: 40,
         },
         rotation: { x: 0, y: 0, z: 0, w: 1 },
         scale: scale / 30,
@@ -178,12 +188,14 @@ export function AdminPlace({ venueId, userId, maps, placements, loadError }: {
       changeScanStage("complete");
       router.refresh();
     } catch (saveError) {
-      setError(saveError instanceof Error ? saveError.message : "The environment map could not be saved.");
+      const message = saveError instanceof Error ? saveError.message : "The environment map could not be saved.";
+      setError(message.toLowerCase().includes("bucket not found") ? "Supabase Storage is not set up yet. Run the 202609020001_ar_scan_storage.sql migration in this project's SQL Editor, then try again." : message);
       changeScanStage("complete");
     } finally { setSaving(false); }
   }
 
-  const scanInstruction = scanStage === "left" ? "Slowly sweep the phone left" : scanStage === "right" ? "Now sweep right, past the center" : scanStage === "complete" ? "Surroundings captured" : scanStage === "compiling" ? `Building landmark map · ${Math.round(compileProgress)}%` : "Point the crosshair where Craig should hide";
+  const scanInstruction = scanStage === "left" ? "Move slowly left — keep Craig on his spot" : scanStage === "left-stop" ? "STOP — left side captured" : scanStage === "right" ? "Move slowly right, past the center" : scanStage === "right-stop" ? "STOP — right side captured" : scanStage === "complete" ? "Surroundings captured" : scanStage === "compiling" ? `Building landmark map · ${Math.round(compileProgress)}%` : "Place Craig, then keep the crosshair on his spot";
+  const craigX = scanDirection === 0 ? 50 : Math.max(18, Math.min(82, 50 + (scanDelta / scanDirection) * 1.35));
 
   return (
     <main className="admin-content place-content">
@@ -195,9 +207,9 @@ export function AdminPlace({ venueId, userId, maps, placements, loadError }: {
           {!camera && <div className="placement-empty"><ScanLine size={38} /><h2>Scan a hiding place</h2><p>Use a detailed, permanent area—not a blank wall or moving object.</p><button onClick={startPlacement}>Start camera and compass</button></div>}
           {camera && <>
             <div className="placement-crosshair"><Crosshair size={42} /></div>
-            <div className="ghost-craig" style={{ bottom: `${height}%`, transform: `translate(-50%, 50%) scale(${scale / 30})` }}><Image src="/images/crispy-craig.webp" alt="Craig placement preview" width={160} height={160} /></div>
+            <div className="ghost-craig" style={{ left: `${craigX}%`, bottom: `${height}%`, transform: `translate(-50%, 50%) scale(${scale / 30})` }}><Image src="/images/crispy-craig.webp" alt="Craig placement preview" width={160} height={160} /></div>
             <div className="placement-state"><Compass size={15} /> {reading?.isAbsolute ? `${Math.round(reading.heading)}° ${cardinalDirection(reading.heading)}` : orientationAllowed === false ? "Compass unavailable" : "Finding direction…"}</div>
-            <div className="scan-calibration"><strong>{scanInstruction}</strong><span>{frames.length}/3 views captured</span>{scanStage === "idle" && <button onClick={beginScan}>Begin left/right scan</button>}{scanStage === "left" && <button onClick={() => recordSide("right")}>Capture left side manually</button>}{scanStage === "right" && <button onClick={() => recordSide("complete")}>Capture right side manually</button>}</div>
+            <div className={`scan-calibration ${scanStage.includes("stop") ? "stop" : ""}`}><strong>{scanInstruction}</strong><span>{frames.length}/3 views captured · Craig remains pinned to the original bearing</span>{scanStage === "idle" && <button onClick={beginScan}>Lock Craig and begin</button>}{scanStage === "left" && <button onClick={() => recordSide("left-stop")}>I reached the left side</button>}{scanStage === "left-stop" && <button onClick={() => changeScanStage("right")}>Now move right</button>}{scanStage === "right" && <button onClick={() => recordSide("right-stop")}>I reached the right side</button>}{scanStage === "right-stop" && <button onClick={() => changeScanStage("complete")}>Finish scan</button>}</div>
           </>}
         </section>
         <aside className="placement-controls">
