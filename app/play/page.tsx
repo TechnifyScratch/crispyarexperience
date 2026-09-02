@@ -20,9 +20,10 @@ export default async function PlayPage() {
 
   const placement = hunt.placement as ImagePlacement;
   const imageTargetSrc = (hunt.map?.targetBundlePath ?? process.env.NEXT_PUBLIC_MINDAR_TARGETS) as string | undefined;
+  const provider = hunt.map?.provider as string | undefined;
 
   return <ArHunt
-    tracking={imageTargetSrc ? { imageTargetSrc, targetIndex: placement.targetIndex ?? 0, placement } : undefined}
+    tracking={imageTargetSrc ? { imageTargetSrc, targetIndex: placement.targetIndex ?? 0, placement, provider } : undefined}
     prizeMessage={hunt.prizeMessage as string | undefined}
     watermark={hunt.captureWatermark as boolean | undefined}
   />;

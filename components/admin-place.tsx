@@ -3,222 +3,190 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Check, Compass, Crosshair, Move3d, RotateCw, Save, ScanLine } from "lucide-react";
+import { Check, Compass, Crosshair, RotateCw, Save, ScanLine } from "lucide-react";
 import { createBrowserSupabase } from "@/lib/supabase/browser";
-import { compileEnvironment } from "@/lib/ar/target-compiler";
-import { mountAdminPlacementRenderer, type PlacementRenderer } from "@/lib/ar/admin-placement-renderer";
-import { cardinalDirection, readingFromEvent, requestOrientationPermission, signedAngleDifference, type CompassReading } from "@/lib/ar/orientation";
-import { detectSurfaceRegions, type SurfaceRegion } from "@/lib/ar/surface-detection";
+import { mountEighthWallAdmin, type EighthWallAdminMount } from "@/lib/ar/eighthwall-provider";
+import { cardinalDirection, readingFromEvent, requestOrientationPermission, type CompassReading } from "@/lib/ar/orientation";
 
 type VenueMap = { id: string; version: number; provider: string; is_active: boolean; target_bundle_path: string };
 type Placement = { id: string; name: string; status: string; target_index: number; scale: number; updated_at: string; venue_map_id: string; position: { snapshotUrl?: string } };
-type ScanStage = "idle" | "left" | "left-stop" | "right" | "right-stop" | "complete" | "compiling";
+type Mode = "idle" | "starting" | "landmark" | "localizing" | "placement";
+type Sweep = "place" | "left" | "pause" | "right" | "done";
 
-export function AdminPlace({ venueId, userId, maps, placements, loadError }: {
-  venueId: string;
-  userId: string;
-  maps: VenueMap[];
-  placements: Placement[];
-  loadError: string;
-}) {
+const SWEEP_ANGLE = Math.PI / 10;
+
+function angleDifference(from: number, to: number) {
+  return Math.atan2(Math.sin(to - from), Math.cos(to - from));
+}
+
+function dataUrlToBlob(dataUrl: string) {
+  const [header, body] = dataUrl.split(",");
+  const type = header.match(/data:(.*?);/)?.[1] ?? "image/jpeg";
+  const bytes = Uint8Array.from(atob(body), (character) => character.charCodeAt(0));
+  return new Blob([bytes], { type });
+}
+
+export function AdminPlace({ venueId, userId, maps, placements, loadError }: { venueId: string; userId: string; maps: VenueMap[]; placements: Placement[]; loadError: string }) {
   const router = useRouter();
-  const videoRef = useRef<HTMLVideoElement>(null);
-  const modelCanvasRef = useRef<HTMLCanvasElement>(null);
-  const placementRendererRef = useRef<PlacementRenderer | null>(null);
-  const snapshotRef = useRef<Blob | null>(null);
-  const selectedSurfaceRef = useRef<string | null>(null);
-  const readingRef = useRef<CompassReading | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const trackerRef = useRef<EighthWallAdminMount | null>(null);
+  const targetBlobRef = useRef<Blob | null>(null);
+  const targetUrlRef = useRef<string | null>(null);
   const centerHeadingRef = useRef<CompassReading | null>(null);
-  const startYawRef = useRef<number | null>(null);
-  const firstDirectionRef = useRef(0);
-  const scanStageRef = useRef<ScanStage>("idle");
-  const captureLockRef = useRef(false);
-  const [camera, setCamera] = useState(false);
-  const [orientationAllowed, setOrientationAllowed] = useState<boolean | null>(null);
+  const readingRef = useRef<CompassReading | null>(null);
+  const yawRef = useRef<number | null>(null);
+  const sweepRef = useRef<Sweep>("place");
+  const sweepOriginRef = useRef(0);
+  const sweepXOriginRef = useRef(0);
+  const cameraXRef = useRef(0);
+  const [mode, setMode] = useState<Mode>("idle");
+  const [sweep, setSweepState] = useState<Sweep>("place");
   const [reading, setReading] = useState<CompassReading | null>(null);
-  const [scanStage, setScanStage] = useState<ScanStage>("idle");
-  const [scanDelta, setScanDelta] = useState(0);
-  const [scanDirection, setScanDirection] = useState(0);
-  const [surfaces, setSurfaces] = useState<SurfaceRegion[]>([]);
-  const [selectedSurfaceId, setSelectedSurfaceId] = useState<string | null>(null);
-  const [selectedSurfaceRegion, setSelectedSurfaceRegion] = useState<SurfaceRegion | null>(null);
-  const [frames, setFrames] = useState<Blob[]>([]);
-  const [compileProgress, setCompileProgress] = useState(0);
+  const [orientationAllowed, setOrientationAllowed] = useState<boolean | null>(null);
+  const [surfacePoints, setSurfacePoints] = useState(0);
+  const [rotation, setRotation] = useState(0);
+  const [scale, setScale] = useState(30);
+  const [name, setName] = useState("");
+  const [makeActive, setMakeActive] = useState(true);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState(loadError);
-  const [name, setName] = useState("");
-  const [makeActive, setMakeActive] = useState(true);
-  const [height, setHeight] = useState(0);
-  const [depth, setDepth] = useState(90);
-  const [scale, setScale] = useState(30);
 
-  function changeScanStage(stage: ScanStage) {
-    scanStageRef.current = stage;
-    setScanStage(stage);
-  }
-
-  useEffect(() => () => {
-    placementRendererRef.current?.cleanup();
-    const stream = videoRef.current?.srcObject as MediaStream | null;
-    stream?.getTracks().forEach((track) => track.stop());
+  const setSweep = useCallback((next: Sweep) => {
+    sweepRef.current = next;
+    setSweepState(next);
   }, []);
-
-  useEffect(() => {
-    if (!camera) return;
-    const updateSurfaces = () => {
-      const video = videoRef.current;
-      if (!video) return;
-      const next = detectSurfaceRegions(video);
-      setSurfaces(next);
-      if (!selectedSurfaceRef.current && next.length) {
-        const closest = [...next].sort((a, b) => Math.hypot(a.x + a.width / 2 - 0.5, a.y + a.height / 2 - 0.6) - Math.hypot(b.x + b.width / 2 - 0.5, b.y + b.height / 2 - 0.6))[0];
-        selectedSurfaceRef.current = closest.id;
-        setSelectedSurfaceId(closest.id);
-        setSelectedSurfaceRegion(closest);
-        setDepth(Math.round(closest.distanceM * 100));
-      }
-    };
-    updateSurfaces();
-    const timer = window.setInterval(updateSurfaces, 700);
-    return () => window.clearInterval(timer);
-  }, [camera]);
-
-  async function startPlacement() {
-    try {
-      const [stream, directionPermission] = await Promise.all([
-        navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false }),
-        requestOrientationPermission(),
-      ]);
-      if (videoRef.current) { videoRef.current.srcObject = stream; await videoRef.current.play(); }
-      if (!modelCanvasRef.current) throw new Error("The 3D placement view is unavailable.");
-      placementRendererRef.current = await mountAdminPlacementRenderer(modelCanvasRef.current);
-      setCamera(true);
-      setOrientationAllowed(directionPermission);
-      setError("");
-    } catch { setError("Camera access was denied or is unavailable on this device."); }
-  }
-
-  const captureFrame = useCallback(async () => {
-    const video = videoRef.current;
-    if (!video || !video.videoWidth) throw new Error("The camera is not ready yet.");
-    const width = Math.min(960, video.videoWidth);
-    const height = Math.round(width * video.videoHeight / video.videoWidth);
-    const canvas = document.createElement("canvas");
-    canvas.width = width;
-    canvas.height = height;
-    canvas.getContext("2d")?.drawImage(video, 0, 0, width, height);
-    const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.86));
-    if (!blob) throw new Error("The scan frame could not be captured.");
-    return blob;
-  }, []);
-
-  const capturePlacementSnapshot = useCallback(async () => {
-    const video = videoRef.current;
-    const overlay = modelCanvasRef.current;
-    if (!video || !overlay || !video.videoWidth) throw new Error("The placement preview is not ready yet.");
-    const width = Math.min(960, video.videoWidth);
-    const height = Math.round(width * video.videoHeight / video.videoWidth);
-    const canvas = document.createElement("canvas");
-    canvas.width = width;
-    canvas.height = height;
-    const context = canvas.getContext("2d");
-    if (!context) throw new Error("The placement preview could not be captured.");
-    context.drawImage(video, 0, 0, width, height);
-    context.drawImage(overlay, 0, 0, overlay.width, overlay.height, 0, 0, width, height);
-    const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.86));
-    if (!blob) throw new Error("The placement preview could not be captured.");
-    return blob;
-  }, []);
-
-  async function beginScan() {
-    try {
-      const [frame, snapshot] = await Promise.all([captureFrame(), capturePlacementSnapshot()]);
-      setFrames([frame]);
-      snapshotRef.current = snapshot;
-      centerHeadingRef.current = readingRef.current;
-      startYawRef.current = readingRef.current?.relativeYaw ?? null;
-      firstDirectionRef.current = 0;
-      setScanDelta(0);
-      setScanDirection(0);
-      changeScanStage("left");
-      setSaved(false);
-      setError("");
-    } catch (scanError) { setError(scanError instanceof Error ? scanError.message : "Could not begin the scan."); }
-  }
-
-  function chooseSurface(surface: SurfaceRegion) {
-    if (scanStage !== "idle") return;
-    selectedSurfaceRef.current = surface.id;
-    setSelectedSurfaceId(surface.id);
-    setSelectedSurfaceRegion(surface);
-    setDepth(Math.round(surface.distanceM * 100));
-    setSaved(false);
-  }
-
-  const recordSide = useCallback(async (nextStage: "left-stop" | "right-stop") => {
-    if (captureLockRef.current) return;
-    captureLockRef.current = true;
-    try {
-      const frame = await captureFrame();
-      setFrames((items) => [...items, frame]);
-      changeScanStage(nextStage);
-    } catch (scanError) { setError(scanError instanceof Error ? scanError.message : "Could not capture that side."); }
-    finally { captureLockRef.current = false; }
-  }, [captureFrame]);
 
   useEffect(() => {
     const handleOrientation = (event: DeviceOrientationEvent) => {
-      const nextReading = readingFromEvent(event);
-      if (!nextReading) return;
-      readingRef.current = nextReading;
-      setReading(nextReading);
-      const origin = startYawRef.current;
-      if (origin == null || captureLockRef.current) return;
-      const delta = signedAngleDifference(nextReading.relativeYaw, origin);
-      setScanDelta(delta);
-      if (scanStageRef.current === "left" && firstDirectionRef.current === 0 && Math.abs(delta) >= 2) {
-        firstDirectionRef.current = Math.sign(delta) || 1;
-        setScanDirection(firstDirectionRef.current);
-      }
-      if (scanStageRef.current === "left" && Math.abs(delta) >= 20) {
-        firstDirectionRef.current ||= Math.sign(delta) || 1;
-        setScanDirection(firstDirectionRef.current);
-        void recordSide("left-stop");
-      } else if (scanStageRef.current === "right" && Math.sign(delta) === -firstDirectionRef.current && Math.abs(delta) >= 20) {
-        void recordSide("right-stop");
-      }
+      const next = readingFromEvent(event);
+      if (!next) return;
+      readingRef.current = next;
+      setReading(next);
     };
     window.addEventListener("deviceorientation", handleOrientation, true);
     return () => window.removeEventListener("deviceorientation", handleOrientation, true);
-  }, [recordSide]);
+  }, []);
+
+  useEffect(() => {
+    trackerRef.current?.updateCraig(scale / 100, rotation * Math.PI / 180);
+  }, [rotation, scale]);
+
+  useEffect(() => () => {
+    trackerRef.current?.cleanup();
+    if (targetUrlRef.current) URL.revokeObjectURL(targetUrlRef.current);
+  }, []);
+
+  const handlePose = useCallback((yaw: number, position?: { x: number }) => {
+    yawRef.current = yaw;
+    if (position) cameraXRef.current = position.x;
+    const delta = angleDifference(sweepOriginRef.current, yaw);
+    const sideways = cameraXRef.current - sweepXOriginRef.current;
+    if (sweepRef.current === "left" && (delta > SWEEP_ANGLE || sideways < -0.18)) {
+      setSweep("pause");
+      window.setTimeout(() => setSweep("right"), 900);
+    } else if (sweepRef.current === "right" && (delta < -SWEEP_ANGLE || sideways > 0.18)) {
+      setSweep("done");
+    }
+  }, [setSweep]);
+
+  async function startPlacement() {
+    if (!canvasRef.current) return;
+    setMode("starting");
+    setError("");
+    try {
+      const directionPermission = await requestOrientationPermission();
+      setOrientationAllowed(directionPermission);
+      trackerRef.current = await mountEighthWallAdmin({
+        canvas: canvasRef.current,
+        onReady: () => setMode("landmark"),
+        onLocalized: () => setMode("placement"),
+        onTrackingLost: () => undefined,
+        onPose: handlePose,
+        onSurfacePoints: setSurfacePoints,
+      });
+    } catch (reason) {
+      setMode("idle");
+      setError(reason instanceof Error ? reason.message : "Camera access was denied or unavailable.");
+    }
+  }
+
+  async function captureLandmark() {
+    const tracker = trackerRef.current;
+    const video = tracker?.video;
+    if (!tracker || !video?.videoWidth) return;
+    try {
+      const width = 480;
+      const height = 640;
+      const output = document.createElement("canvas");
+      output.width = width;
+      output.height = height;
+      const context = output.getContext("2d", { willReadFrequently: true });
+      if (!context) throw new Error("The landmark image could not be captured.");
+      const sourceRatio = video.videoWidth / video.videoHeight;
+      const targetRatio = width / height;
+      let sx = 0, sy = 0, sw = video.videoWidth, sh = video.videoHeight;
+      if (sourceRatio > targetRatio) { sw = sh * targetRatio; sx = (video.videoWidth - sw) / 2; }
+      else { sh = sw / targetRatio; sy = (video.videoHeight - sh) / 2; }
+      context.drawImage(video, sx, sy, sw, sh, 0, 0, width, height);
+      const image = context.getImageData(0, 0, width, height);
+      for (let index = 0; index < image.data.length; index += 4) {
+        const gray = Math.round(image.data[index] * 0.299 + image.data[index + 1] * 0.587 + image.data[index + 2] * 0.114);
+        image.data[index] = gray;
+        image.data[index + 1] = gray;
+        image.data[index + 2] = gray;
+      }
+      context.putImageData(image, 0, 0);
+      const blob = await new Promise<Blob | null>((resolve) => output.toBlob(resolve, "image/jpeg", 0.9));
+      if (!blob) throw new Error("The landmark image could not be captured.");
+      if (targetUrlRef.current) URL.revokeObjectURL(targetUrlRef.current);
+      targetBlobRef.current = blob;
+      targetUrlRef.current = URL.createObjectURL(blob);
+      centerHeadingRef.current = readingRef.current;
+      setMode("localizing");
+      tracker.setTarget(targetUrlRef.current, width, height);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "The landmark could not be captured.");
+    }
+  }
+
+  function placeCraig(event: React.PointerEvent<HTMLCanvasElement>) {
+    if (mode !== "placement") return;
+    const placed = trackerRef.current?.placeAt(event.clientX, event.clientY);
+    if (!placed) {
+      setError("No mapped surface was found there. Move slowly so green tracking points appear, then tap one.");
+      return;
+    }
+    setError("");
+    trackerRef.current?.updateCraig(scale / 100, rotation * Math.PI / 180);
+    sweepOriginRef.current = yawRef.current ?? 0;
+    sweepXOriginRef.current = cameraXRef.current;
+    setSweep("left");
+  }
 
   async function savePlacement() {
+    const tracker = trackerRef.current;
+    const target = targetBlobRef.current;
+    const nextPlacement = tracker?.getPlacement();
     if (!name.trim()) { setError("Give this hiding place a name."); return; }
-    if (frames.length !== 3 || !snapshotRef.current) { setError("Complete the center, left, and right environment scan first."); return; }
+    if (!tracker || !target || !nextPlacement || sweep !== "done") { setError("Finish the surface placement and left/right tracking check first."); return; }
     const supabase = createBrowserSupabase();
     if (!supabase) { setError("Supabase is not configured."); return; }
-    setSaving(true);
-    setSaved(false);
-    setError("");
-    changeScanStage("compiling");
-
+    setSaving(true); setSaved(false); setError("");
     try {
-      const compiled = await compileEnvironment(frames, setCompileProgress);
+      const snapshot = dataUrlToBlob(tracker.capture());
       const mapId = crypto.randomUUID();
       const version = Math.max(0, ...maps.map((map) => map.version)) + 1;
       const folder = `${venueId}/${mapId}`;
-      const bundlePath = `${folder}/targets.mind`;
+      const targetPath = `${folder}/landmark.jpg`;
       const snapshotPath = `${folder}/placement.jpg`;
-
-      const [bundleUpload, snapshotUpload] = await Promise.all([
-        supabase.storage.from("ar-maps").upload(bundlePath, new Blob([compiled], { type: "application/octet-stream" }), { upsert: false }),
-        supabase.storage.from("ar-maps").upload(snapshotPath, snapshotRef.current, { contentType: "image/jpeg", upsert: false }),
+      const [targetUpload, snapshotUpload] = await Promise.all([
+        supabase.storage.from("ar-maps").upload(targetPath, target, { contentType: "image/jpeg", upsert: false }),
+        supabase.storage.from("ar-maps").upload(snapshotPath, snapshot, { contentType: "image/jpeg", upsert: false }),
       ]);
-      if (bundleUpload.error || snapshotUpload.error) throw bundleUpload.error || snapshotUpload.error;
-      const { data: publicBundle } = supabase.storage.from("ar-maps").getPublicUrl(bundlePath);
+      if (targetUpload.error || snapshotUpload.error) throw targetUpload.error || snapshotUpload.error;
+      const { data: publicTarget } = supabase.storage.from("ar-maps").getPublicUrl(targetPath);
       const { data: publicSnapshot } = supabase.storage.from("ar-maps").getPublicUrl(snapshotPath);
-
       if (makeActive) {
         const [{ error: mapArchiveError }, { error: placementArchiveError }] = await Promise.all([
           supabase.from("venue_maps").update({ is_active: false }).eq("venue_id", venueId).eq("is_active", true),
@@ -226,84 +194,56 @@ export function AdminPlace({ venueId, userId, maps, placements, loadError }: {
         ]);
         if (mapArchiveError || placementArchiveError) throw mapArchiveError || placementArchiveError;
       }
-
-      const { error: mapError } = await supabase.from("venue_maps").insert({ id: mapId, venue_id: venueId, version, provider: "mindar", target_bundle_path: publicBundle.publicUrl, is_active: makeActive });
+      const { error: mapError } = await supabase.from("venue_maps").insert({ id: mapId, venue_id: venueId, version, provider: "8thwall", target_bundle_path: publicTarget.publicUrl, is_active: makeActive });
       if (mapError) throw mapError;
       const compass = centerHeadingRef.current;
-      const { error: placementError } = await supabase.from("placements").insert({
-        venue_id: venueId,
-        venue_map_id: mapId,
-        name: name.trim(),
-        status: makeActive ? "active" : "draft",
-        target_index: 0,
-        position: {
-          x: (baseX / 100 - 0.5) * 1.2,
-          y: (0.5 - craigY) * 1.2 + height / 100,
-          z: -(depth / 100),
-          targetIndexes: [0, 1, 2],
-          snapshotUrl: publicSnapshot.publicUrl,
-          surface: selectedSurface ? { x: selectedSurface.x, y: selectedSurface.y, width: selectedSurface.width, height: selectedSurface.height, distanceM: depth / 100, label: selectedSurface.label } : null,
-          heading: compass?.isAbsolute ? Math.round(compass.heading) : null,
-          headingAccuracy: compass?.isAbsolute ? compass.accuracy : null,
-          scanSpan: 40,
-        },
-        rotation: { x: 0, y: 0, z: 0, w: 1 },
-        scale: scale / 30,
-        created_by: userId,
-        activated_at: makeActive ? new Date().toISOString() : null,
-      });
+      nextPlacement.position.snapshotUrl = publicSnapshot.publicUrl;
+      nextPlacement.position.heading = compass?.isAbsolute ? Math.round(compass.heading) : null;
+      nextPlacement.position.headingAccuracy = compass?.isAbsolute ? compass.accuracy : null;
+      const { error: placementError } = await supabase.from("placements").insert({ venue_id: venueId, venue_map_id: mapId, name: name.trim(), status: makeActive ? "active" : "draft", target_index: 0, position: nextPlacement.position, rotation: nextPlacement.rotation, scale: nextPlacement.scale, created_by: userId, activated_at: makeActive ? new Date().toISOString() : null });
       if (placementError) throw placementError;
       setSaved(true);
-      setName("");
-      changeScanStage("complete");
       router.refresh();
-    } catch (saveError) {
-      const message = saveError instanceof Error ? saveError.message : "The environment map could not be saved.";
-      const storageSetupError = message.toLowerCase().includes("bucket not found") || message.toLowerCase().includes("mime type");
-      setError(storageSetupError ? "Supabase Storage needs the latest setup. Run both 20260902 AR storage migrations in this project's SQL Editor, then try again." : message);
-      changeScanStage("complete");
-    } finally { setSaving(false); }
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "The placement could not be saved.");
+    } finally {
+      setSaving(false);
+    }
   }
 
-  const scanInstruction = scanStage === "left" ? "Move slowly left — keep Craig on his spot" : scanStage === "left-stop" ? "STOP — left side captured" : scanStage === "right" ? "Move slowly right, past the center" : scanStage === "right-stop" ? "STOP — right side captured" : scanStage === "complete" ? "Surroundings captured" : scanStage === "compiling" ? `Building landmark map · ${Math.round(compileProgress)}%` : "Place Craig, then keep the crosshair on his spot";
-  const selectedSurface = surfaces.find((surface) => surface.id === selectedSurfaceId) ?? selectedSurfaceRegion;
-  const baseX = selectedSurface ? (selectedSurface.x + selectedSurface.width / 2) * 100 : 50;
-  const craigX = scanDirection === 0 ? baseX : Math.max(10, Math.min(90, baseX + (scanDelta / scanDirection) * 1.35));
-  const craigY = selectedSurface ? selectedSurface.y + selectedSurface.height * 0.86 : 0.68;
-
-  useEffect(() => {
-    placementRendererRef.current?.update({ screenX: craigX / 100, screenY: craigY, distanceM: depth / 100, sizeM: scale / 100, liftM: height / 100 });
-  }, [craigX, craigY, depth, height, scale]);
+  const instruction = mode === "landmark" ? "Fill the frame with a permanent, detailed flat area" :
+    mode === "localizing" ? "Hold still while the landmark locks" :
+    sweep === "place" ? "Tap a green mapped point where Craig’s feet should go" :
+    sweep === "left" ? "Slowly move or turn the phone left — Craig stays put" :
+    sweep === "pause" ? "Stop. Good." :
+    sweep === "right" ? "Now slowly move or turn the phone right" : "Tracking check complete";
 
   return (
     <main className="admin-content place-content">
-      <div className="admin-heading"><div><p className="eyebrow">Placement scan</p><h1>Hide Craig</h1><p>No photo upload needed. This scan captures and builds the surrounding landmarks automatically.</p></div></div>
+      <div className="admin-heading"><div><p className="eyebrow">Spatial placement</p><h1>Hide Craig</h1><p>Use an existing sign, menu, mural, or detailed wall as the invisible landmark. Players will never see a marker.</p></div></div>
       {error && <p className="admin-error" role="alert">{error}</p>}
       <div className="placement-grid">
-        <section className="placement-view">
-          <video ref={videoRef} muted playsInline />
-          <canvas ref={modelCanvasRef} className="placement-model-canvas" />
-          {!camera && <div className="placement-empty"><ScanLine size={38} /><h2>Scan a hiding place</h2><p>Use a detailed, permanent area—not a blank wall or moving object.</p><button onClick={startPlacement}>Start camera and compass</button></div>}
-          {camera && <>
-            <div className={`surface-regions ${scanStage === "idle" ? "" : "locked"}`} aria-label="Detected surfaces">{surfaces.map((surface) => <button key={surface.id} className={surface.id === selectedSurfaceId ? "selected" : ""} style={{ left: `${surface.x * 100}%`, top: `${surface.y * 100}%`, width: `${surface.width * 100}%`, height: `${surface.height * 100}%` }} onClick={() => chooseSurface(surface)} aria-label={`Use detected ${surface.label}, about ${surface.distanceM.toFixed(1)} metres away`}><span>{surface.distanceM.toFixed(1)} m</span></button>)}</div>
-            <div className="placement-crosshair" style={{ left: `${craigX}%`, top: `${craigY * 100}%` }}><Crosshair size={34} /></div>
-            <div className="placement-state"><Compass size={15} /> {reading?.isAbsolute ? `${Math.round(reading.heading)}° ${cardinalDirection(reading.heading)}` : orientationAllowed === false ? "Compass unavailable" : "Finding direction…"}</div>
-            <div className="surface-guide-label">Surface guide · tap a box</div>
-            <div className={`scan-calibration ${scanStage.includes("stop") ? "stop" : ""}`}><strong>{scanInstruction}</strong><span>{frames.length}/3 views captured · Craig remains pinned to the original bearing</span>{scanStage === "idle" && <button onClick={beginScan}>Lock Craig and begin</button>}{scanStage === "left" && <button onClick={() => recordSide("left-stop")}>I reached the left side</button>}{scanStage === "left-stop" && <button onClick={() => changeScanStage("right")}>Now move right</button>}{scanStage === "right" && <button onClick={() => recordSide("right-stop")}>I reached the right side</button>}{scanStage === "right-stop" && <button onClick={() => changeScanStage("complete")}>Finish scan</button>}</div>
-          </>}
+        <section className="placement-view spatial-placement-view">
+          <canvas ref={canvasRef} className="spatial-canvas" onPointerUp={placeCraig} />
+          {mode === "idle" && <div className="placement-empty"><ScanLine size={38} /><h2>Map a real hiding place</h2><p>The camera builds a 3D map from the store itself.</p><button onClick={startPlacement}>Start spatial camera</button></div>}
+          {mode === "starting" && <div className="camera-message"><strong>Starting spatial tracking…</strong></div>}
+          {mode !== "idle" && mode !== "starting" && <div className={`tracking-status ${sweep === "done" ? "locked" : "searching"}`}>{instruction}</div>}
+          {mode === "landmark" && <button className="landmark-capture" onClick={captureLandmark}>Capture invisible landmark</button>}
+          {mode === "placement" && <div className="surface-point-count"><Crosshair size={14} /> {surfacePoints} real map points</div>}
+          {mode !== "idle" && <div className="placement-state"><Compass size={15} /> {reading?.isAbsolute ? `${Math.round(reading.heading)}° ${cardinalDirection(reading.heading)}` : orientationAllowed === false ? "Direction unavailable" : "Finding direction…"}</div>}
+          {mode !== "idle" && <a className="eighthwall-credit" href="https://www.8thwall.org/" target="_blank" rel="noreferrer">Powered by 8th Wall</a>}
         </section>
         <aside className="placement-controls">
-          <div className="control-heading"><div><strong>New hiding place</strong><span>{makeActive ? "Will become active" : "Draft"}</span></div></div>
-          <label><span>Name</span><input type="text" placeholder="e.g. Left side of menu" value={name} onChange={(e) => { setName(e.target.value); setSaved(false); }} /></label>
-          <label><span><Move3d size={18} /> Lift above surface</span><output>{height} cm</output><input type="range" min="0" max="60" value={height} onChange={(e) => setHeight(Number(e.target.value))} /></label>
-          <label><span><Crosshair size={18} /> Camera distance</span><output>{(depth / 100).toFixed(2)} m</output><input type="range" min="35" max="220" value={depth} onChange={(e) => setDepth(Number(e.target.value))} /></label>
-          <label><span><RotateCw size={18} /> Craig size</span><output>{scale} cm</output><input type="range" min="12" max="60" value={scale} onChange={(e) => setScale(Number(e.target.value))} /></label>
-          <label className="placement-checkbox"><input type="checkbox" checked={makeActive} onChange={(e) => setMakeActive(e.target.checked)} /> Make this the active hiding place</label>
-          <button className="admin-primary save-placement" disabled={saving || frames.length !== 3} onClick={savePlacement}>{saved ? <><Check size={18} /> Saved in Supabase</> : <><Save size={18} /> {saving ? "Building and saving…" : "Save hiding place"}</>}</button>
-          <small className="placement-disclosure">Tracking frames are processed on this phone. The compiled landmark map and one placement reference image are uploaded; customer camera frames are not.</small>
+          <div className="control-heading"><div><strong>New hiding place</strong><span>{sweep === "done" ? "Ready to save" : "Spatial calibration"}</span></div></div>
+          <label><span>Name</span><input type="text" placeholder="e.g. Front counter corner" value={name} onChange={(event) => { setName(event.target.value); setSaved(false); }} /></label>
+          <label><span><RotateCw size={18} /> Craig rotation</span><output>{rotation}°</output><input type="range" min="-180" max="180" value={rotation} onChange={(event) => setRotation(Number(event.target.value))} /></label>
+          <label><span><Crosshair size={18} /> Craig height</span><output>{scale} cm</output><input type="range" min="12" max="60" value={scale} onChange={(event) => setScale(Number(event.target.value))} /></label>
+          <p className="placement-disclosure">Green dots are real SLAM map points. The outlined square sits in 3D perspective on the selected plane, and Craig’s feet remain locked to it.</p>
+          <button className="admin-primary save-placement" disabled={saving || sweep !== "done"} onClick={savePlacement}>{saved ? <><Check size={18} /> Saved in Supabase</> : <><Save size={18} /> {saving ? "Saving…" : "Save hiding place"}</>}</button>
+          <label className="placement-checkbox"><input type="checkbox" checked={makeActive} onChange={(event) => setMakeActive(event.target.checked)} /> Make this the active hiding place</label>
         </aside>
       </div>
-      <section className="admin-panel"><div className="panel-heading"><div><h2>Saved placements</h2><p>Click a placement to see where Craig was hidden.</p></div></div>{placements.length === 0 && <p>No placements saved yet.</p>}{placements.map((placement) => <details className="placement-record" key={placement.id}><summary><span><strong>{placement.name}</strong><small>Map {maps.find((map) => map.id === placement.venue_map_id)?.version ?? "?"} · scale {placement.scale}</small></span><b>{placement.status}</b></summary>{placement.position?.snapshotUrl ? <img src={placement.position.snapshotUrl} alt={`Saved view of ${placement.name}`} /> : <p>This older placement does not have a saved screenshot.</p>}</details>)}</section>
+      <section className="admin-panel"><div className="panel-heading"><div><h2>Saved placements</h2><p>Click a placement to see where Craig was hidden.</p></div></div>{placements.length === 0 && <p>No placements saved yet.</p>}{placements.map((item) => <details className="placement-record" key={item.id}><summary><span><strong>{item.name}</strong><small>{maps.find((map) => map.id === item.venue_map_id)?.provider ?? "AR"} map {maps.find((map) => map.id === item.venue_map_id)?.version ?? "?"} · scale {item.scale}</small></span><b>{item.status}</b></summary>{item.position?.snapshotUrl ? <img src={item.position.snapshotUrl} alt={`Saved view of ${item.name}`} /> : <p>This older placement does not have a saved screenshot.</p>}</details>)}</section>
     </main>
   );
 }

@@ -5,13 +5,13 @@ A mobile-only, in-store augmented-reality hunt for Crispy Cones. Guests tap once
 ## Included
 
 - Reference-matched mobile intro, zero-form guest entry, timed camera, and capture flow
-- Free, self-hosted MindAR image tracking with no visible QR codes or floor markers
+- Self-hosted 8th Wall world tracking (SLAM) with no visible QR codes or floor markers
 - Optimized Craig GLB plus an exact 2D Craig intro asset
 - Supabase roles, row-level security, weekly schedules, date exceptions, placements, sessions, and audit records
 - Separate admin overview, placement, schedule, and settings routes
 - Vercel-ready Next.js application
 
-Without Supabase values, the app runs in a local preview flow. Without a compiled store target, the camera uses the Craig model preview. Production admin access is never bypassed when Supabase is configured.
+Without Supabase values, the app runs in a local preview flow. Production admin access is never bypassed when Supabase is configured.
 
 ## Local setup
 
@@ -37,15 +37,17 @@ where p.id = u.id
   and lower(u.email) in (lower('first@example.com'), lower('second@example.com'));
 ```
 
-## Markerless store setup
+## Markerless spatial setup
 
-MindAR needs recognizable visual features, but it does not need an obvious marker. In **Admin → Place Craig**, tap one of the outlined surface regions, adjust Craig's estimated camera distance, lock his 3D position, and follow the paced left/stop/right/stop scan. The browser captures three temporary tracking views, compiles their visual features on the admin phone, uploads the resulting `.mind` landmark bundle plus a placement reference image to Supabase Storage, and creates the map and placement records automatically. The three source tracking frames are not uploaded.
+In **Admin → Place Craig**, first fill the camera with an existing, permanent, detailed flat area such as a menu, mural, or decorated wall. The browser captures that view as an invisible relocalization landmark. It then displays real SLAM map points; tap one to place Craig on the corresponding 3D plane, adjust his rotation and height, and complete the guided left/stop/right scan. Craig remains at the selected world position while the admin moves the camera.
+
+Players scan the same ordinary store area once. The landmark establishes the shared coordinate system, then SLAM keeps Craig fixed in place as the player turns and walks around. The player is never shown the landmark image, an artificial marker, or a placement puck.
 
 If saving reports a bucket or file-type error, run both `202609020001_ar_scan_storage.sql` and `202609020002_placement_snapshots.sql` in the SQL Editor of the same Supabase project used by Vercel. These create the public `ar-maps` bucket, enable JPEG placement references, and install admin-only write policies; deploying to Vercel does not apply Supabase migrations.
 
 Avoid blank walls, glossy reflections, digital screens, or movable decor. Test every hiding place on several iPhones and Android phones in the actual restaurant lighting before publishing the public QR code.
 
-The vendored MindAR and Three.js browser runtimes retain their MIT licenses in `public/vendor`. The original STL remains in `assets/source`; the browser receives a 40,000-face, 0.72 MB GLB from `public/models`.
+The 8th Wall framework is open source, while its distributed SLAM engine is provided under 8th Wall's separate binary-only limited-use license and requires attribution. `npm install` copies that engine into `public/vendor/8thwall` for local development and Vercel builds. The legacy MindAR provider remains available for older saved placements. The original STL remains in `assets/source`; the browser receives a 40,000-face, 0.72 MB GLB from `public/models`.
 
 ## Vercel
 

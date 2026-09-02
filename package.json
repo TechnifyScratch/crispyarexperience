@@ -3,12 +3,14 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
+    "postinstall": "node scripts/copy-8thwall.mjs",
     "dev": "next dev",
     "build": "next build --webpack",
     "start": "next start",
     "lint": "eslint ."
   },
   "dependencies": {
+    "@8thwall/engine-binary": "^1.0.0",
     "@supabase/ssr": "0.12.5",
     "@supabase/supabase-js": "2.112.4",
     "clsx": "2.1.1",

@@ -7,7 +7,7 @@ import { cardinalDirection, readingFromEvent, requestOrientationPermission, sign
 
 type CameraState = "idle" | "starting" | "ready" | "denied" | "unavailable";
 type ArHuntProps = {
-  tracking?: { imageTargetSrc: string; targetIndex: number; placement: ImagePlacement };
+  tracking?: { imageTargetSrc: string; targetIndex: number; placement: ImagePlacement; provider?: string };
   prizeMessage?: string;
   watermark?: boolean;
 };
@@ -26,6 +26,7 @@ export function ArHunt({ tracking, prizeMessage = "Show this screen when you ord
   const captureVideoRef = useRef<HTMLVideoElement | null>(null);
   const captureCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const rendererCleanupRef = useRef<(() => void) | null>(null);
+  const combinedCanvasRef = useRef(false);
   const startedRef = useRef(false);
   const [cameraState, setCameraState] = useState<CameraState>("idle");
   const [targetVisible, setTargetVisible] = useState(false);
@@ -42,6 +43,18 @@ export function ArHunt({ tracking, prizeMessage = "Show this screen when you ord
     if (!navigator.mediaDevices?.getUserMedia) { setCameraState("unavailable"); return; }
     try {
       if (tracking && hostRef.current) {
+        if (tracking.provider === "8thwall") {
+          const canvas = overlayRef.current;
+          if (!canvas) throw new Error("Spatial canvas is unavailable.");
+          const { mountEighthWallHunt } = await import("@/lib/ar/eighthwall-provider");
+          const mounted = await mountEighthWallHunt({ canvas, ...tracking, onLocalized: () => setTargetVisible(true) });
+          combinedCanvasRef.current = true;
+          captureVideoRef.current = mounted.video;
+          captureCanvasRef.current = mounted.canvas;
+          rendererCleanupRef.current = mounted.cleanup;
+          setCameraState("ready");
+          return;
+        }
         const { mountMindArHunt } = await import("@/lib/ar/mindar-provider");
         const mounted = await mountMindArHunt({ host: hostRef.current, ...tracking, onLocated: () => setTargetVisible(true), onLost: () => setTargetVisible(false) });
         captureVideoRef.current = mounted.video;
@@ -102,7 +115,20 @@ export function ArHunt({ tracking, prizeMessage = "Show this screen when you ord
     const video = captureVideoRef.current;
     const overlay = captureCanvasRef.current;
     const frame = hostRef.current;
-    if (!video || !overlay || !frame || video.videoWidth === 0) return;
+    if (!overlay || !frame) return;
+    if (combinedCanvasRef.current) {
+      if (!overlay.width || !overlay.height) return;
+      const output = document.createElement("canvas");
+      output.width = overlay.width;
+      output.height = overlay.height;
+      const context = output.getContext("2d");
+      if (!context) return;
+      context.drawImage(overlay, 0, 0);
+      addWatermark(context, output.width, output.height, watermark);
+      setCapturedUrl(output.toDataURL("image/jpeg", 0.9));
+      return;
+    }
+    if (!video || video.videoWidth === 0) return;
     const width = video.videoWidth;
     const height = video.videoHeight;
     const output = document.createElement("canvas");
@@ -117,15 +143,7 @@ export function ArHunt({ tracking, prizeMessage = "Show this screen when you ord
     else { sh = width / viewRatio; sy = (height - sh) / 2; }
     context.drawImage(video, sx, sy, sw, sh, 0, 0, width, height);
     context.drawImage(overlay, 0, 0, overlay.width, overlay.height, 0, 0, width, height);
-    if (watermark) {
-      const pad = Math.round(width * 0.04);
-      context.fillStyle = "rgba(0,0,0,.68)";
-      context.roundRect(pad, height - pad - 64, 270, 64, 22);
-      context.fill();
-      context.fillStyle = "white";
-      context.font = "700 24px Arial";
-      context.fillText("Crispy Craig Hunt", pad + 22, height - pad - 26);
-    }
+    addWatermark(context, width, height, watermark);
     setCapturedUrl(output.toDataURL("image/jpeg", 0.9));
   }, [watermark]);
 
@@ -144,10 +162,11 @@ export function ArHunt({ tracking, prizeMessage = "Show this screen when you ord
     <main className="ar-page">
       <div className="search-timer" aria-label={`Search time ${formatElapsed(elapsed)}`}><small>SEARCH TIME</small>{formatElapsed(elapsed)}</div>
       <div className="ar-camera-frame" ref={hostRef}>
-        <video ref={videoRef} className={`camera-feed ${tracking ? "provider-placeholder" : ""}`} muted playsInline />
-        <canvas ref={overlayRef} className={`ar-overlay ${tracking ? "provider-placeholder" : ""}`} />
+        <video ref={videoRef} className={`camera-feed ${tracking && tracking.provider !== "8thwall" ? "provider-placeholder" : ""}`} muted playsInline />
+        <canvas ref={overlayRef} className={`ar-overlay ${tracking && tracking.provider !== "8thwall" ? "provider-placeholder" : ""}`} />
         {tracking && cameraState === "ready" && !targetVisible && <div className="scan-prompt">{expectedHeading != null && heading != null ? `${Math.abs(signedAngleDifference(expectedHeading, heading)) < 35 ? "You’re facing the hiding area — scan slowly" : `Turn toward ${cardinalDirection(expectedHeading)}`} · ${Math.round(heading)}° ${cardinalDirection(heading)}` : "Look around slowly…"}</div>}
         {tracking && cameraState === "ready" && expectedHeading != null && !compassEnabled && <button className="compass-button" onClick={enableCompass}><Compass size={17} /> Use direction</button>}
+        {tracking?.provider === "8thwall" && <a className="eighthwall-credit" href="https://www.8thwall.org/" target="_blank" rel="noreferrer">Powered by 8th Wall</a>}
         {cameraState === "starting" && <div className="camera-message"><LoaderCircle className="spin" size={28} /><strong>Starting your camera…</strong></div>}
         {(cameraState === "denied" || cameraState === "unavailable") && <div className="camera-message error-card"><Camera size={30} /><strong>Camera access is needed</strong><span>Allow camera access in your browser settings, then try again.</span><button onClick={startCamera}>Try again</button></div>}
       </div>
@@ -164,4 +183,18 @@ export function ArHunt({ tracking, prizeMessage = "Show this screen when you ord
       )}
     </main>
   );
+}
+
+function addWatermark(context: CanvasRenderingContext2D, width: number, height: number, enabled: boolean) {
+  if (!enabled) return;
+  const pad = Math.round(width * 0.04);
+  const boxHeight = Math.max(46, Math.round(width * 0.067));
+  const boxWidth = Math.max(210, Math.round(width * 0.28));
+  context.fillStyle = "rgba(0,0,0,.68)";
+  context.beginPath();
+  context.roundRect(pad, height - pad - boxHeight, boxWidth, boxHeight, boxHeight / 3);
+  context.fill();
+  context.fillStyle = "white";
+  context.font = `700 ${Math.max(17, Math.round(width * 0.025))}px Arial`;
+  context.fillText("Crispy Craig Hunt", pad + boxHeight * 0.28, height - pad - boxHeight * 0.38);
 }
