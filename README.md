@@ -39,9 +39,9 @@ where p.id = u.id
 
 ## Markerless store setup
 
-MindAR needs recognizable visual features, but it does not need an obvious marker. In **Admin → Place Craig**, point at a permanent, detailed store feature, lock Craig's position, and follow the paced left/stop/right/stop scan. The browser captures three temporary views, compiles their visual features on the admin phone, uploads the resulting `.mind` landmark bundle to Supabase Storage, and creates the map and placement records automatically. The source camera frames are not uploaded.
+MindAR needs recognizable visual features, but it does not need an obvious marker. In **Admin → Place Craig**, tap one of the outlined surface regions, adjust Craig's estimated camera distance, lock his 3D position, and follow the paced left/stop/right/stop scan. The browser captures three temporary tracking views, compiles their visual features on the admin phone, uploads the resulting `.mind` landmark bundle plus a placement reference image to Supabase Storage, and creates the map and placement records automatically. The three source tracking frames are not uploaded.
 
-If saving reports **Bucket not found**, run `supabase/migrations/202609020001_ar_scan_storage.sql` in the SQL Editor of the same Supabase project used by Vercel. This creates the public `ar-maps` bucket and its admin-only write policies; deploying to Vercel does not apply Supabase migrations.
+If saving reports a bucket or file-type error, run both `202609020001_ar_scan_storage.sql` and `202609020002_placement_snapshots.sql` in the SQL Editor of the same Supabase project used by Vercel. These create the public `ar-maps` bucket, enable JPEG placement references, and install admin-only write policies; deploying to Vercel does not apply Supabase migrations.
 
 Avoid blank walls, glossy reflections, digital screens, or movable decor. Test every hiding place on several iPhones and Android phones in the actual restaurant lighting before publishing the public QR code.
 

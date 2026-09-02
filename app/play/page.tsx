@@ -2,12 +2,12 @@ import { ArHunt } from "@/components/ar-hunt";
 import { AnonymousEntry } from "@/components/anonymous-entry";
 import Image from "next/image";
 import Link from "next/link";
-import { arConfigured, supabaseConfigured } from "@/lib/config";
+import { supabaseConfigured } from "@/lib/config";
 import { createServerSupabase } from "@/lib/supabase/server";
 import type { ImagePlacement } from "@/lib/ar/mindar-provider";
 
 export default async function PlayPage() {
-  if (!supabaseConfigured) return <ArHunt previewMode />;
+  if (!supabaseConfigured) return <ArHunt />;
 
   const supabase = await createServerSupabase();
   const { data: auth } = await supabase!.auth.getUser();
@@ -22,7 +22,6 @@ export default async function PlayPage() {
   const imageTargetSrc = (hunt.map?.targetBundlePath ?? process.env.NEXT_PUBLIC_MINDAR_TARGETS) as string | undefined;
 
   return <ArHunt
-    previewMode={!arConfigured || !imageTargetSrc}
     tracking={imageTargetSrc ? { imageTargetSrc, targetIndex: placement.targetIndex ?? 0, placement } : undefined}
     prizeMessage={hunt.prizeMessage as string | undefined}
     watermark={hunt.captureWatermark as boolean | undefined}

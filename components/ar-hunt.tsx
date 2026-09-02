@@ -7,7 +7,6 @@ import { cardinalDirection, readingFromEvent, requestOrientationPermission, sign
 
 type CameraState = "idle" | "starting" | "ready" | "denied" | "unavailable";
 type ArHuntProps = {
-  previewMode: boolean;
   tracking?: { imageTargetSrc: string; targetIndex: number; placement: ImagePlacement };
   prizeMessage?: string;
   watermark?: boolean;
@@ -20,7 +19,7 @@ function formatElapsed(totalSeconds: number) {
   return `${hours}:${minutes}:${seconds}`;
 }
 
-export function ArHunt({ previewMode, tracking, prizeMessage = "Show this screen when you order.", watermark = true }: ArHuntProps) {
+export function ArHunt({ tracking, prizeMessage = "Show this screen when you order.", watermark = true }: ArHuntProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const overlayRef = useRef<HTMLCanvasElement>(null);
@@ -57,8 +56,6 @@ export function ArHunt({ previewMode, tracking, prizeMessage = "Show this screen
       if (!video || !canvas) throw new Error("Camera view is unavailable.");
       video.srcObject = stream;
       await video.play();
-      const { mountCraigPreview } = await import("@/lib/ar/craig-preview");
-      rendererCleanupRef.current = await mountCraigPreview(canvas);
       captureVideoRef.current = video;
       captureCanvasRef.current = canvas;
       setCameraState("ready");
@@ -149,7 +146,6 @@ export function ArHunt({ previewMode, tracking, prizeMessage = "Show this screen
       <div className="ar-camera-frame" ref={hostRef}>
         <video ref={videoRef} className={`camera-feed ${tracking ? "provider-placeholder" : ""}`} muted playsInline />
         <canvas ref={overlayRef} className={`ar-overlay ${tracking ? "provider-placeholder" : ""}`} />
-        {previewMode && <div className="ar-preview-badge">Preview mode</div>}
         {tracking && cameraState === "ready" && !targetVisible && <div className="scan-prompt">{expectedHeading != null && heading != null ? `${Math.abs(signedAngleDifference(expectedHeading, heading)) < 35 ? "You’re facing the hiding area — scan slowly" : `Turn toward ${cardinalDirection(expectedHeading)}`} · ${Math.round(heading)}° ${cardinalDirection(heading)}` : "Look around slowly…"}</div>}
         {tracking && cameraState === "ready" && expectedHeading != null && !compassEnabled && <button className="compass-button" onClick={enableCompass}><Compass size={17} /> Use direction</button>}
         {cameraState === "starting" && <div className="camera-message"><LoaderCircle className="spin" size={28} /><strong>Starting your camera…</strong></div>}

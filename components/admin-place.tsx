@@ -1,15 +1,17 @@
 "use client";
+/* eslint-disable @next/next/no-img-element */
 
-import Image from "next/image";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Check, Compass, Crosshair, Move3d, RotateCw, Save, ScanLine } from "lucide-react";
 import { createBrowserSupabase } from "@/lib/supabase/browser";
 import { compileEnvironment } from "@/lib/ar/target-compiler";
+import { mountAdminPlacementRenderer, type PlacementRenderer } from "@/lib/ar/admin-placement-renderer";
 import { cardinalDirection, readingFromEvent, requestOrientationPermission, signedAngleDifference, type CompassReading } from "@/lib/ar/orientation";
+import { detectSurfaceRegions, type SurfaceRegion } from "@/lib/ar/surface-detection";
 
 type VenueMap = { id: string; version: number; provider: string; is_active: boolean; target_bundle_path: string };
-type Placement = { id: string; name: string; status: string; target_index: number; scale: number; updated_at: string; venue_map_id: string };
+type Placement = { id: string; name: string; status: string; target_index: number; scale: number; updated_at: string; venue_map_id: string; position: { snapshotUrl?: string } };
 type ScanStage = "idle" | "left" | "left-stop" | "right" | "right-stop" | "complete" | "compiling";
 
 export function AdminPlace({ venueId, userId, maps, placements, loadError }: {
@@ -21,6 +23,10 @@ export function AdminPlace({ venueId, userId, maps, placements, loadError }: {
 }) {
   const router = useRouter();
   const videoRef = useRef<HTMLVideoElement>(null);
+  const modelCanvasRef = useRef<HTMLCanvasElement>(null);
+  const placementRendererRef = useRef<PlacementRenderer | null>(null);
+  const snapshotRef = useRef<Blob | null>(null);
+  const selectedSurfaceRef = useRef<string | null>(null);
   const readingRef = useRef<CompassReading | null>(null);
   const centerHeadingRef = useRef<CompassReading | null>(null);
   const startYawRef = useRef<number | null>(null);
@@ -33,6 +39,9 @@ export function AdminPlace({ venueId, userId, maps, placements, loadError }: {
   const [scanStage, setScanStage] = useState<ScanStage>("idle");
   const [scanDelta, setScanDelta] = useState(0);
   const [scanDirection, setScanDirection] = useState(0);
+  const [surfaces, setSurfaces] = useState<SurfaceRegion[]>([]);
+  const [selectedSurfaceId, setSelectedSurfaceId] = useState<string | null>(null);
+  const [selectedSurfaceRegion, setSelectedSurfaceRegion] = useState<SurfaceRegion | null>(null);
   const [frames, setFrames] = useState<Blob[]>([]);
   const [compileProgress, setCompileProgress] = useState(0);
   const [saving, setSaving] = useState(false);
@@ -40,8 +49,8 @@ export function AdminPlace({ venueId, userId, maps, placements, loadError }: {
   const [error, setError] = useState(loadError);
   const [name, setName] = useState("");
   const [makeActive, setMakeActive] = useState(true);
-  const [height, setHeight] = useState(42);
-  const [depth, setDepth] = useState(55);
+  const [height, setHeight] = useState(0);
+  const [depth, setDepth] = useState(90);
   const [scale, setScale] = useState(30);
 
   function changeScanStage(stage: ScanStage) {
@@ -50,9 +59,30 @@ export function AdminPlace({ venueId, userId, maps, placements, loadError }: {
   }
 
   useEffect(() => () => {
+    placementRendererRef.current?.cleanup();
     const stream = videoRef.current?.srcObject as MediaStream | null;
     stream?.getTracks().forEach((track) => track.stop());
   }, []);
+
+  useEffect(() => {
+    if (!camera) return;
+    const updateSurfaces = () => {
+      const video = videoRef.current;
+      if (!video) return;
+      const next = detectSurfaceRegions(video);
+      setSurfaces(next);
+      if (!selectedSurfaceRef.current && next.length) {
+        const closest = [...next].sort((a, b) => Math.hypot(a.x + a.width / 2 - 0.5, a.y + a.height / 2 - 0.6) - Math.hypot(b.x + b.width / 2 - 0.5, b.y + b.height / 2 - 0.6))[0];
+        selectedSurfaceRef.current = closest.id;
+        setSelectedSurfaceId(closest.id);
+        setSelectedSurfaceRegion(closest);
+        setDepth(Math.round(closest.distanceM * 100));
+      }
+    };
+    updateSurfaces();
+    const timer = window.setInterval(updateSurfaces, 700);
+    return () => window.clearInterval(timer);
+  }, [camera]);
 
   async function startPlacement() {
     try {
@@ -61,6 +91,8 @@ export function AdminPlace({ venueId, userId, maps, placements, loadError }: {
         requestOrientationPermission(),
       ]);
       if (videoRef.current) { videoRef.current.srcObject = stream; await videoRef.current.play(); }
+      if (!modelCanvasRef.current) throw new Error("The 3D placement view is unavailable.");
+      placementRendererRef.current = await mountAdminPlacementRenderer(modelCanvasRef.current);
       setCamera(true);
       setOrientationAllowed(directionPermission);
       setError("");
@@ -81,10 +113,29 @@ export function AdminPlace({ venueId, userId, maps, placements, loadError }: {
     return blob;
   }, []);
 
+  const capturePlacementSnapshot = useCallback(async () => {
+    const video = videoRef.current;
+    const overlay = modelCanvasRef.current;
+    if (!video || !overlay || !video.videoWidth) throw new Error("The placement preview is not ready yet.");
+    const width = Math.min(960, video.videoWidth);
+    const height = Math.round(width * video.videoHeight / video.videoWidth);
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const context = canvas.getContext("2d");
+    if (!context) throw new Error("The placement preview could not be captured.");
+    context.drawImage(video, 0, 0, width, height);
+    context.drawImage(overlay, 0, 0, overlay.width, overlay.height, 0, 0, width, height);
+    const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.86));
+    if (!blob) throw new Error("The placement preview could not be captured.");
+    return blob;
+  }, []);
+
   async function beginScan() {
     try {
-      const frame = await captureFrame();
+      const [frame, snapshot] = await Promise.all([captureFrame(), capturePlacementSnapshot()]);
       setFrames([frame]);
+      snapshotRef.current = snapshot;
       centerHeadingRef.current = readingRef.current;
       startYawRef.current = readingRef.current?.relativeYaw ?? null;
       firstDirectionRef.current = 0;
@@ -94,6 +145,15 @@ export function AdminPlace({ venueId, userId, maps, placements, loadError }: {
       setSaved(false);
       setError("");
     } catch (scanError) { setError(scanError instanceof Error ? scanError.message : "Could not begin the scan."); }
+  }
+
+  function chooseSurface(surface: SurfaceRegion) {
+    if (scanStage !== "idle") return;
+    selectedSurfaceRef.current = surface.id;
+    setSelectedSurfaceId(surface.id);
+    setSelectedSurfaceRegion(surface);
+    setDepth(Math.round(surface.distanceM * 100));
+    setSaved(false);
   }
 
   const recordSide = useCallback(async (nextStage: "left-stop" | "right-stop") => {
@@ -135,7 +195,7 @@ export function AdminPlace({ venueId, userId, maps, placements, loadError }: {
 
   async function savePlacement() {
     if (!name.trim()) { setError("Give this hiding place a name."); return; }
-    if (frames.length !== 3) { setError("Complete the center, left, and right environment scan first."); return; }
+    if (frames.length !== 3 || !snapshotRef.current) { setError("Complete the center, left, and right environment scan first."); return; }
     const supabase = createBrowserSupabase();
     if (!supabase) { setError("Supabase is not configured."); return; }
     setSaving(true);
@@ -149,10 +209,15 @@ export function AdminPlace({ venueId, userId, maps, placements, loadError }: {
       const version = Math.max(0, ...maps.map((map) => map.version)) + 1;
       const folder = `${venueId}/${mapId}`;
       const bundlePath = `${folder}/targets.mind`;
+      const snapshotPath = `${folder}/placement.jpg`;
 
-      const { error: uploadError } = await supabase.storage.from("ar-maps").upload(bundlePath, new Blob([compiled], { type: "application/octet-stream" }), { upsert: false });
-      if (uploadError) throw uploadError;
+      const [bundleUpload, snapshotUpload] = await Promise.all([
+        supabase.storage.from("ar-maps").upload(bundlePath, new Blob([compiled], { type: "application/octet-stream" }), { upsert: false }),
+        supabase.storage.from("ar-maps").upload(snapshotPath, snapshotRef.current, { contentType: "image/jpeg", upsert: false }),
+      ]);
+      if (bundleUpload.error || snapshotUpload.error) throw bundleUpload.error || snapshotUpload.error;
       const { data: publicBundle } = supabase.storage.from("ar-maps").getPublicUrl(bundlePath);
+      const { data: publicSnapshot } = supabase.storage.from("ar-maps").getPublicUrl(snapshotPath);
 
       if (makeActive) {
         const [{ error: mapArchiveError }, { error: placementArchiveError }] = await Promise.all([
@@ -172,7 +237,12 @@ export function AdminPlace({ venueId, userId, maps, placements, loadError }: {
         status: makeActive ? "active" : "draft",
         target_index: 0,
         position: {
-          x: 0, y: height / 100, z: -(depth / 100), targetIndexes: [0, 1, 2],
+          x: (baseX / 100 - 0.5) * 1.2,
+          y: (0.5 - craigY) * 1.2 + height / 100,
+          z: -(depth / 100),
+          targetIndexes: [0, 1, 2],
+          snapshotUrl: publicSnapshot.publicUrl,
+          surface: selectedSurface ? { x: selectedSurface.x, y: selectedSurface.y, width: selectedSurface.width, height: selectedSurface.height, distanceM: depth / 100, label: selectedSurface.label } : null,
           heading: compass?.isAbsolute ? Math.round(compass.heading) : null,
           headingAccuracy: compass?.isAbsolute ? compass.accuracy : null,
           scanSpan: 40,
@@ -189,13 +259,21 @@ export function AdminPlace({ venueId, userId, maps, placements, loadError }: {
       router.refresh();
     } catch (saveError) {
       const message = saveError instanceof Error ? saveError.message : "The environment map could not be saved.";
-      setError(message.toLowerCase().includes("bucket not found") ? "Supabase Storage is not set up yet. Run the 202609020001_ar_scan_storage.sql migration in this project's SQL Editor, then try again." : message);
+      const storageSetupError = message.toLowerCase().includes("bucket not found") || message.toLowerCase().includes("mime type");
+      setError(storageSetupError ? "Supabase Storage needs the latest setup. Run both 20260902 AR storage migrations in this project's SQL Editor, then try again." : message);
       changeScanStage("complete");
     } finally { setSaving(false); }
   }
 
   const scanInstruction = scanStage === "left" ? "Move slowly left — keep Craig on his spot" : scanStage === "left-stop" ? "STOP — left side captured" : scanStage === "right" ? "Move slowly right, past the center" : scanStage === "right-stop" ? "STOP — right side captured" : scanStage === "complete" ? "Surroundings captured" : scanStage === "compiling" ? `Building landmark map · ${Math.round(compileProgress)}%` : "Place Craig, then keep the crosshair on his spot";
-  const craigX = scanDirection === 0 ? 50 : Math.max(18, Math.min(82, 50 + (scanDelta / scanDirection) * 1.35));
+  const selectedSurface = surfaces.find((surface) => surface.id === selectedSurfaceId) ?? selectedSurfaceRegion;
+  const baseX = selectedSurface ? (selectedSurface.x + selectedSurface.width / 2) * 100 : 50;
+  const craigX = scanDirection === 0 ? baseX : Math.max(10, Math.min(90, baseX + (scanDelta / scanDirection) * 1.35));
+  const craigY = selectedSurface ? selectedSurface.y + selectedSurface.height * 0.86 : 0.68;
+
+  useEffect(() => {
+    placementRendererRef.current?.update({ screenX: craigX / 100, screenY: craigY, distanceM: depth / 100, sizeM: scale / 100, liftM: height / 100 });
+  }, [craigX, craigY, depth, height, scale]);
 
   return (
     <main className="admin-content place-content">
@@ -204,26 +282,28 @@ export function AdminPlace({ venueId, userId, maps, placements, loadError }: {
       <div className="placement-grid">
         <section className="placement-view">
           <video ref={videoRef} muted playsInline />
+          <canvas ref={modelCanvasRef} className="placement-model-canvas" />
           {!camera && <div className="placement-empty"><ScanLine size={38} /><h2>Scan a hiding place</h2><p>Use a detailed, permanent area—not a blank wall or moving object.</p><button onClick={startPlacement}>Start camera and compass</button></div>}
           {camera && <>
-            <div className="placement-crosshair"><Crosshair size={42} /></div>
-            <div className="ghost-craig" style={{ left: `${craigX}%`, bottom: `${height}%`, transform: `translate(-50%, 50%) scale(${scale / 30})` }}><Image src="/images/crispy-craig.webp" alt="Craig placement preview" width={160} height={160} /></div>
+            <div className={`surface-regions ${scanStage === "idle" ? "" : "locked"}`} aria-label="Detected surfaces">{surfaces.map((surface) => <button key={surface.id} className={surface.id === selectedSurfaceId ? "selected" : ""} style={{ left: `${surface.x * 100}%`, top: `${surface.y * 100}%`, width: `${surface.width * 100}%`, height: `${surface.height * 100}%` }} onClick={() => chooseSurface(surface)} aria-label={`Use detected ${surface.label}, about ${surface.distanceM.toFixed(1)} metres away`}><span>{surface.distanceM.toFixed(1)} m</span></button>)}</div>
+            <div className="placement-crosshair" style={{ left: `${craigX}%`, top: `${craigY * 100}%` }}><Crosshair size={34} /></div>
             <div className="placement-state"><Compass size={15} /> {reading?.isAbsolute ? `${Math.round(reading.heading)}° ${cardinalDirection(reading.heading)}` : orientationAllowed === false ? "Compass unavailable" : "Finding direction…"}</div>
+            <div className="surface-guide-label">Surface guide · tap a box</div>
             <div className={`scan-calibration ${scanStage.includes("stop") ? "stop" : ""}`}><strong>{scanInstruction}</strong><span>{frames.length}/3 views captured · Craig remains pinned to the original bearing</span>{scanStage === "idle" && <button onClick={beginScan}>Lock Craig and begin</button>}{scanStage === "left" && <button onClick={() => recordSide("left-stop")}>I reached the left side</button>}{scanStage === "left-stop" && <button onClick={() => changeScanStage("right")}>Now move right</button>}{scanStage === "right" && <button onClick={() => recordSide("right-stop")}>I reached the right side</button>}{scanStage === "right-stop" && <button onClick={() => changeScanStage("complete")}>Finish scan</button>}</div>
           </>}
         </section>
         <aside className="placement-controls">
           <div className="control-heading"><div><strong>New hiding place</strong><span>{makeActive ? "Will become active" : "Draft"}</span></div></div>
           <label><span>Name</span><input type="text" placeholder="e.g. Left side of menu" value={name} onChange={(e) => { setName(e.target.value); setSaved(false); }} /></label>
-          <label><span><Move3d size={18} /> Vertical offset</span><output>{height} cm</output><input type="range" min="8" max="82" value={height} onChange={(e) => setHeight(Number(e.target.value))} /></label>
-          <label><span><Crosshair size={18} /> Depth offset</span><output>{depth} cm</output><input type="range" min="20" max="180" value={depth} onChange={(e) => setDepth(Number(e.target.value))} /></label>
+          <label><span><Move3d size={18} /> Lift above surface</span><output>{height} cm</output><input type="range" min="0" max="60" value={height} onChange={(e) => setHeight(Number(e.target.value))} /></label>
+          <label><span><Crosshair size={18} /> Camera distance</span><output>{(depth / 100).toFixed(2)} m</output><input type="range" min="35" max="220" value={depth} onChange={(e) => setDepth(Number(e.target.value))} /></label>
           <label><span><RotateCw size={18} /> Craig size</span><output>{scale} cm</output><input type="range" min="12" max="60" value={scale} onChange={(e) => setScale(Number(e.target.value))} /></label>
           <label className="placement-checkbox"><input type="checkbox" checked={makeActive} onChange={(e) => setMakeActive(e.target.checked)} /> Make this the active hiding place</label>
           <button className="admin-primary save-placement" disabled={saving || frames.length !== 3} onClick={savePlacement}>{saved ? <><Check size={18} /> Saved in Supabase</> : <><Save size={18} /> {saving ? "Building and saving…" : "Save hiding place"}</>}</button>
-          <small className="placement-disclosure">The scan photos are processed on this phone. Only compiled landmark data is uploaded; customer camera frames are not.</small>
+          <small className="placement-disclosure">Tracking frames are processed on this phone. The compiled landmark map and one placement reference image are uploaded; customer camera frames are not.</small>
         </aside>
       </div>
-      <section className="admin-panel"><div className="panel-heading"><div><h2>Saved placements</h2><p>Live Supabase records.</p></div></div>{placements.length === 0 && <p>No placements saved yet.</p>}{placements.map((placement) => <div className="schedule-row" key={placement.id}><div><strong>{placement.name}</strong><span>Map {maps.find((map) => map.id === placement.venue_map_id)?.version ?? "?"} · scale {placement.scale}</span></div><b>{placement.status}</b></div>)}</section>
+      <section className="admin-panel"><div className="panel-heading"><div><h2>Saved placements</h2><p>Click a placement to see where Craig was hidden.</p></div></div>{placements.length === 0 && <p>No placements saved yet.</p>}{placements.map((placement) => <details className="placement-record" key={placement.id}><summary><span><strong>{placement.name}</strong><small>Map {maps.find((map) => map.id === placement.venue_map_id)?.version ?? "?"} · scale {placement.scale}</small></span><b>{placement.status}</b></summary>{placement.position?.snapshotUrl ? <img src={placement.position.snapshotUrl} alt={`Saved view of ${placement.name}`} /> : <p>This older placement does not have a saved screenshot.</p>}</details>)}</section>
     </main>
   );
 }

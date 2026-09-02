@@ -1,3 +1,4 @@
+/* eslint-disable @next/next/no-img-element */
 import Link from "next/link";
 import { createServerSupabase } from "@/lib/supabase/server";
 
@@ -20,7 +21,7 @@ export default async function AdminDashboard() {
   if (venueError || !venue) return <main className="admin-content"><p className="admin-error">Could not load the restaurant: {venueError?.message ?? "venue not found"}</p></main>;
 
   const [placementResult, mapResult, scheduleResult, exceptionResult, huntResult] = await Promise.all([
-    supabase.from("placements").select("id,name,status,updated_at,venue_map_id,target_index").eq("venue_id", venue.id).eq("status", "active").maybeSingle(),
+    supabase.from("placements").select("id,name,status,updated_at,venue_map_id,target_index,position").eq("venue_id", venue.id).eq("status", "active").maybeSingle(),
     supabase.from("venue_maps").select("id,version,provider,created_at").eq("venue_id", venue.id).eq("is_active", true).maybeSingle(),
     supabase.from("weekly_schedules").select("weekday,starts_at,ends_at,enabled,placement_id").eq("venue_id", venue.id).eq("enabled", true).order("weekday"),
     supabase.from("schedule_exceptions").select("id,local_date,kind,starts_at,ends_at,label").eq("venue_id", venue.id).gte("local_date", localDate(venue.timezone)).order("local_date").limit(5),
@@ -44,6 +45,7 @@ export default async function AdminDashboard() {
         <h2>{activePlacement?.name ?? "No active placement"}</h2>
         <p>{!venue.hunt_enabled ? "The hunt is disabled in Settings." : isLive ? "The venue, schedule, map, and placement are active." : "The hunt is outside its scheduled hours or is missing an active map or placement."}</p>
         <div className="status-actions"><Link href="/admin/place">Manage placements</Link><Link href="/admin/schedule">Manage availability</Link></div>
+        {activePlacement && <details className="active-placement-photo"><summary>View placement screenshot</summary>{activePlacement.position?.snapshotUrl ? <img src={activePlacement.position.snapshotUrl as string} alt={`Saved view of ${activePlacement.name}`} /> : <p>This older placement does not have a saved screenshot.</p>}</details>}
       </section>
       <section className="admin-stats">
         <article><small>Active placement</small><strong>{activePlacement?.name ?? "None"}</strong><p>{activePlacement ? `Target ${activePlacement.target_index}` : "Create or activate one"}</p></article>
