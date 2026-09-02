@@ -17,7 +17,7 @@ Without Supabase values, the app runs in a local preview flow. Without a compile
 
 1. Run `npm install`.
 2. Copy `.env.example` to `.env.local` and add the Supabase values.
-3. Apply `supabase/migrations/202608310001_initial.sql` to the Supabase project.
+3. Apply the SQL files in `supabase/migrations` to the Supabase project in filename order.
 4. Enable Anonymous Sign-Ins in Supabase under Authentication settings.
 5. Run `npm run dev`.
 
@@ -37,9 +37,9 @@ where p.id = u.id
   and lower(u.email) in (lower('first@example.com'), lower('second@example.com'));
 ```
 
-## Markerless-looking store setup
+## Markerless store setup
 
-MindAR needs recognizable visual features, but it does not need an obvious marker. Photograph permanent, detailed store features such as a menu board, mural, branded sign, or decorated wall. Compile those images into `public/targets/store.mind`, then assign their target indexes to placements in Supabase. Craig can be offset from the recognized image so he appears beside, above, or in front of it rather than pasted directly onto it.
+MindAR needs recognizable visual features, but it does not need an obvious marker. In **Admin → Place Craig**, point at a permanent, detailed store feature, then sweep left and right. The browser captures three temporary views, compiles their visual features on the admin phone, uploads the resulting `.mind` landmark bundle to Supabase Storage, and creates the map and placement records automatically. The source camera frames are not uploaded.
 
 Avoid blank walls, glossy reflections, digital screens, or movable decor. Test every hiding place on several iPhones and Android phones in the actual restaurant lighting before publishing the public QR code.
 

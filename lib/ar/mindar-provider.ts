@@ -3,7 +3,15 @@ import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 
 export type ImagePlacement = {
   targetIndex?: number;
-  position: { x: number; y: number; z: number };
+  position: {
+    x: number;
+    y: number;
+    z: number;
+    targetIndexes?: number[];
+    heading?: number | null;
+    headingAccuracy?: number | null;
+    scanSpan?: number;
+  };
   rotation: { x: number; y: number; z: number; w: number };
   scale: number;
 };
@@ -85,14 +93,21 @@ export async function mountMindArHunt(options: MountOptions): Promise<ArMount> {
   key.position.set(2, 4, 3);
   scene.add(key);
 
-  const anchor = mindar.addAnchor(options.targetIndex);
-  const craig = await loadCraig();
-  craig.position.set(options.placement.position.x, options.placement.position.y, options.placement.position.z);
-  craig.quaternion.set(options.placement.rotation.x, options.placement.rotation.y, options.placement.rotation.z, options.placement.rotation.w);
-  craig.scale.multiplyScalar(options.placement.scale);
-  anchor.group.add(craig);
-  anchor.onTargetFound = options.onLocated;
-  anchor.onTargetLost = options.onLost;
+  const targetIndexes = options.placement.position.targetIndexes?.length
+    ? options.placement.position.targetIndexes
+    : [options.targetIndex];
+  const craigSource = await loadCraig();
+  let visibleTargets = 0;
+  targetIndexes.forEach((targetIndex) => {
+    const anchor = mindar.addAnchor(targetIndex);
+    const craig = craigSource.clone(true);
+    craig.position.set(options.placement.position.x, options.placement.position.y, options.placement.position.z);
+    craig.quaternion.set(options.placement.rotation.x, options.placement.rotation.y, options.placement.rotation.z, options.placement.rotation.w);
+    craig.scale.multiplyScalar(options.placement.scale);
+    anchor.group.add(craig);
+    anchor.onTargetFound = () => { visibleTargets += 1; options.onLocated(); };
+    anchor.onTargetLost = () => { visibleTargets = Math.max(0, visibleTargets - 1); if (visibleTargets === 0) options.onLost(); };
+  });
 
   await mindar.start();
   mindar.video.classList.add("camera-feed", "provider-feed");

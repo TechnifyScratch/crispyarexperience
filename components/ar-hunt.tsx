@@ -1,8 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Camera, Check, Download, LoaderCircle, Share2, X } from "lucide-react";
+import { Camera, Check, Compass, Download, LoaderCircle, Share2, X } from "lucide-react";
 import type { ImagePlacement } from "@/lib/ar/mindar-provider";
+import { cardinalDirection, readingFromEvent, requestOrientationPermission, signedAngleDifference } from "@/lib/ar/orientation";
 
 type CameraState = "idle" | "starting" | "ready" | "denied" | "unavailable";
 type ArHuntProps = {
@@ -32,6 +33,9 @@ export function ArHunt({ previewMode, tracking, prizeMessage = "Show this screen
   const [elapsed, setElapsed] = useState(0);
   const [capturedUrl, setCapturedUrl] = useState<string | null>(null);
   const [sharing, setSharing] = useState(false);
+  const [heading, setHeading] = useState<number | null>(null);
+  const [compassEnabled, setCompassEnabled] = useState(false);
+  const expectedHeading = tracking?.placement.position.heading;
 
   const startCamera = useCallback(async () => {
     if (cameraState === "starting" || cameraState === "ready") return;
@@ -82,6 +86,21 @@ export function ArHunt({ previewMode, tracking, prizeMessage = "Show this screen
     };
   }, []);
 
+  useEffect(() => {
+    if (!compassEnabled) return;
+    const handleOrientation = (event: DeviceOrientationEvent) => {
+      const next = readingFromEvent(event);
+      if (next?.isAbsolute) setHeading(next.heading);
+    };
+    window.addEventListener("deviceorientation", handleOrientation, true);
+    return () => window.removeEventListener("deviceorientation", handleOrientation, true);
+  }, [compassEnabled]);
+
+  async function enableCompass() {
+    const allowed = await requestOrientationPermission();
+    setCompassEnabled(allowed);
+  }
+
   const takeCapture = useCallback(() => {
     const video = captureVideoRef.current;
     const overlay = captureCanvasRef.current;
@@ -131,7 +150,8 @@ export function ArHunt({ previewMode, tracking, prizeMessage = "Show this screen
         <video ref={videoRef} className={`camera-feed ${tracking ? "provider-placeholder" : ""}`} muted playsInline />
         <canvas ref={overlayRef} className={`ar-overlay ${tracking ? "provider-placeholder" : ""}`} />
         {previewMode && <div className="ar-preview-badge">Preview mode</div>}
-        {tracking && cameraState === "ready" && !targetVisible && <div className="scan-prompt">Look around slowly…</div>}
+        {tracking && cameraState === "ready" && !targetVisible && <div className="scan-prompt">{expectedHeading != null && heading != null ? `${Math.abs(signedAngleDifference(expectedHeading, heading)) < 35 ? "You’re facing the hiding area — scan slowly" : `Turn toward ${cardinalDirection(expectedHeading)}`} · ${Math.round(heading)}° ${cardinalDirection(heading)}` : "Look around slowly…"}</div>}
+        {tracking && cameraState === "ready" && expectedHeading != null && !compassEnabled && <button className="compass-button" onClick={enableCompass}><Compass size={17} /> Use direction</button>}
         {cameraState === "starting" && <div className="camera-message"><LoaderCircle className="spin" size={28} /><strong>Starting your camera…</strong></div>}
         {(cameraState === "denied" || cameraState === "unavailable") && <div className="camera-message error-card"><Camera size={30} /><strong>Camera access is needed</strong><span>Allow camera access in your browser settings, then try again.</span><button onClick={startCamera}>Try again</button></div>}
       </div>

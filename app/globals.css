@@ -783,3 +783,54 @@ h1 { margin: 0; font-family: Georgia, 'Times New Roman', serif; font-size: clamp
   .settings-form > label { display: block; }
   .settings-form textarea { width: 100%; margin-top: 5px; }
 }
+
+/* Resting state */
+.closed-page { width: 100%; min-height: 100svh; overflow: hidden; color: #fff; background: #000; }
+.closed-experience { width: min(100%, 500px); min-height: 100svh; margin: auto; padding: max(34px, env(safe-area-inset-top)) 28px max(24px, env(safe-area-inset-bottom)); position: relative; display: flex; flex-direction: column; isolation: isolate; }
+.closed-logo { width: 168px; height: auto; }
+.closed-copy { z-index: 2; width: min(88%, 385px); margin-top: clamp(70px, 15svh, 150px); }
+.closed-copy .eyebrow { color: rgba(255,255,255,.55); font: 600 11px var(--player-sans); letter-spacing: .17em; }
+.closed-copy h1 { color: #fff; font-family: var(--player-display); font-size: clamp(48px, 14vw, 68px); font-weight: 400; line-height: .92; letter-spacing: -.045em; }
+.closed-copy > p:last-of-type { max-width: 290px; margin: 20px 0 0; color: rgba(255,255,255,.68); font: 400 15px/1.5 var(--player-sans); }
+.closed-copy a { width: fit-content; margin-top: 28px; padding: 11px 18px; display: inline-block; border: 1px solid rgba(255,255,255,.75); color: #fff; font: 700 12px var(--player-sans); text-decoration: none; }
+.closed-craig { width: min(78vw, 390px); height: auto; position: absolute; z-index: 1; right: -21%; bottom: -12%; filter: drop-shadow(0 0 22px rgba(255,255,255,.05)); }
+
+/* Guided environment calibration */
+.scan-calibration { width: calc(100% - 24px); position: absolute; z-index: 4; left: 12px; bottom: 12px; padding: 12px; display: grid; gap: 5px; color: #fff; background: rgba(0,0,0,.78); font: 13px Arial, sans-serif; }
+.scan-calibration span { color: rgba(255,255,255,.72); font-size: 11px; }
+.scan-calibration button { width: fit-content; margin-top: 5px; }
+.placement-state { display: flex; align-items: center; gap: 5px; }
+.placement-disclosure { display: block; margin-top: 12px; color: #666; font: 11px/1.45 Arial, sans-serif; }
+.compass-button { position: absolute; z-index: 6; top: 14px; right: 14px; padding: 9px 11px; display: flex; align-items: center; gap: 6px; border: 1px solid rgba(255,255,255,.5); border-radius: 20px; color: #fff; background: rgba(0,0,0,.65); font: 700 11px var(--player-sans); }
+
+/* Still bare-bones, but easier for staff to scan and use */
+.admin-shell { color: #202020; background: #f3f3f1; font: 14px Arial, Helvetica, sans-serif; }
+.admin-sidebar { padding: 12px 18px; display: flex !important; align-items: center; gap: 24px; background: #fff; border: 0; border-bottom: 1px solid #cfcfca; }
+.admin-logo { min-width: 150px; padding: 0; font: 700 14px Arial, sans-serif; }
+.admin-logo span { display: inline; margin-left: 5px; color: #666; font: 400 12px Arial, sans-serif; }
+.admin-sidebar nav { display: flex; gap: 18px; }
+.admin-sidebar nav a, .admin-exit { margin: 0; color: #333; font: 13px Arial, sans-serif; text-decoration: none; }
+.admin-sidebar nav a:hover, .admin-exit:hover { color: #000; text-decoration: underline; }
+.admin-exit { margin-left: auto; }
+.admin-content { width: min(1040px, calc(100% - 36px)); margin: 28px auto; }
+.admin-heading { display: flex; align-items: end; justify-content: space-between; }
+.admin-heading h1 { font: 700 30px Arial, sans-serif; }
+.admin-heading .eyebrow { color: #666; font: 700 10px Arial, sans-serif; text-transform: uppercase; letter-spacing: .1em; }
+.status-hero, .admin-panel, .placement-controls { padding: 14px; border: 1px solid #c7c7c2; background: #fff; }
+.admin-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.admin-stats article { border: 1px solid #c7c7c2; font: 13px Arial, sans-serif; }
+.admin-stats small, .admin-stats strong, .admin-stats p { display: block; margin: 0; }
+.admin-stats strong { margin: 6px 0 3px; font-weight: 700; }
+.panel-heading h2 { font: 700 17px Arial, sans-serif; }
+.schedule-row { border-color: #ddd; }
+.placement-controls > label { display: grid; grid-template-columns: 1fr auto; gap: 6px; }
+.placement-controls input[type=text], .placement-controls input[type=number], .placement-controls select { grid-column: 1 / -1; }
+
+@media (max-width: 700px) {
+  .admin-sidebar { display: block !important; }
+  .admin-sidebar nav { margin-top: 9px; display: flex; flex-wrap: wrap; gap: 7px 14px; }
+  .admin-exit { display: inline-block; margin-top: 10px; }
+  .admin-content { width: auto; margin: 18px 10px 60px; }
+  .admin-heading { display: block; }
+  .admin-stats { grid-template-columns: 1fr; }
+}
