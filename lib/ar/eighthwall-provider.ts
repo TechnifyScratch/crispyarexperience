@@ -157,6 +157,9 @@ async function mount(options: {
   let candidatePosition: THREE.Vector3 | null = null;
   let candidateRotation: THREE.Quaternion | null = null;
   let candidateScale = 1;
+  let previousPosition: THREE.Vector3 | null = null;
+  let previousRotation: THREE.Quaternion | null = null;
+  let previousScale = 1;
   let outline: THREE.LineSegments | null = null;
   let pointCloud: THREE.Points | null = null;
   const relativeMatrix = new THREE.Matrix4();
@@ -185,7 +188,24 @@ async function mount(options: {
     stableStartedAt = 0;
     candidatePosition = null;
     candidateRotation = null;
+    previousPosition = null;
+    previousRotation = null;
     options.onLocalizationProgress?.(0);
+  };
+
+  const confirmCandidate = () => {
+    if (options.admin || localized || !targetVisible || !trackingNormal || !candidatePosition || !candidateRotation) return;
+    const elapsed = performance.now() - stableStartedAt;
+    const frameProgress = Math.min(1, stableFrames / 3);
+    const timeProgress = Math.min(1, elapsed / 250);
+    options.onLocalizationProgress?.(Math.min(frameProgress, timeProgress));
+    if (stableFrames >= 3 && elapsed >= 250) {
+      placePlayerCraig(new THREE.Matrix4().compose(
+        candidatePosition,
+        candidateRotation,
+        new THREE.Vector3(candidateScale, candidateScale, candidateScale),
+      ));
+    }
   };
 
   const applyTarget = (detail: ImageEvent) => {
@@ -212,34 +232,38 @@ async function mount(options: {
       candidatePosition = position;
       candidateRotation = rotation;
       candidateScale = detail.scale;
+      previousPosition = position.clone();
+      previousRotation = rotation.clone();
+      previousScale = detail.scale;
       stableFrames = 1;
       stableStartedAt = performance.now();
       return;
     }
 
-    const positionDelta = candidatePosition.distanceTo(position);
-    const rotationDelta = candidateRotation.angleTo(rotation);
-    const scaleDelta = Math.abs(detail.scale - candidateScale) / Math.max(candidateScale, 0.0001);
-    if (positionDelta > 0.028 || rotationDelta > THREE.MathUtils.degToRad(2.5) || scaleDelta > 0.05) {
+    const positionDelta = previousPosition?.distanceTo(position) ?? 0;
+    const rotationDelta = previousRotation?.angleTo(rotation) ?? 0;
+    const scaleDelta = Math.abs(detail.scale - previousScale) / Math.max(previousScale, 0.0001);
+    if (positionDelta > 0.12 || rotationDelta > THREE.MathUtils.degToRad(10) || scaleDelta > 0.2) {
       candidatePosition.copy(position);
       candidateRotation.copy(rotation);
       candidateScale = detail.scale;
+      previousPosition = position.clone();
+      previousRotation = rotation.clone();
+      previousScale = detail.scale;
       stableFrames = 1;
       stableStartedAt = performance.now();
       options.onLocalizationProgress?.(0);
       return;
     }
 
+    previousPosition?.copy(position);
+    previousRotation?.copy(rotation);
+    previousScale = detail.scale;
     candidatePosition.lerp(position, 0.18);
     candidateRotation.slerp(rotation, 0.18);
     candidateScale = THREE.MathUtils.lerp(candidateScale, detail.scale, 0.18);
     stableFrames += 1;
-    const frameProgress = Math.min(1, stableFrames / 30);
-    const timeProgress = Math.min(1, (performance.now() - stableStartedAt) / 1000);
-    options.onLocalizationProgress?.(Math.min(frameProgress, timeProgress));
-    if (stableFrames >= 30 && performance.now() - stableStartedAt >= 1000) {
-      placePlayerCraig(new THREE.Matrix4().compose(candidatePosition, candidateRotation, new THREE.Vector3(candidateScale, candidateScale, candidateScale)));
-    }
+    confirmCandidate();
   };
 
   const sceneModule: PipelineModule = {
@@ -290,6 +314,7 @@ async function mount(options: {
           options.onTrackingLost?.();
         }
         trackingNormal = nextNormal;
+        confirmCandidate();
       }
       points = reality.worldPoints ?? points;
       const poseYaw = cameraYaw(reality.rotation);
@@ -310,11 +335,8 @@ async function mount(options: {
       { event: "reality.imageupdated", process: ({ detail }) => { if (targetVisible || !localized) applyTarget(detail); } },
       { event: "reality.imagelost", process: () => {
         targetVisible = false;
-        if (!options.admin) {
-          craig.visible = false;
-          localized = false;
+        if (!options.admin && !localized) {
           resetCandidate();
-          options.onTrackingLost?.();
         }
       } },
     ],
