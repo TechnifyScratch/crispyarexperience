@@ -7,8 +7,8 @@ A mobile-only, in-store augmented-reality hunt for Crispy Cones. Guests tap once
 - Reference-matched mobile intro, zero-form guest entry, timed camera, and capture flow
 - Self-hosted 8th Wall world tracking (SLAM) with no visible QR codes or floor markers
 - Optimized Craig GLB plus an exact 2D Craig intro asset
-- Supabase roles, row-level security, weekly schedules, date exceptions, placements, sessions, and audit records
-- Separate admin overview, placement, schedule, and settings routes
+- Supabase roles, row-level security, weekly schedules, date exceptions, placement folders, player sessions, staff notes, and audit records
+- Separate admin overview, real player analytics, placement, schedule, notes, and settings routes
 - Vercel-ready Next.js application
 
 Without Supabase values, the app runs in a local preview flow. Production admin access is never bypassed when Supabase is configured.
@@ -20,6 +20,8 @@ Without Supabase values, the app runs in a local preview flow. Production admin 
 3. Apply the SQL files in `supabase/migrations` to the Supabase project in filename order.
 4. Enable Anonymous Sign-Ins in Supabase under Authentication settings.
 5. Run `npm run dev`.
+
+The `202609030001_admin_analytics_notes_folders.sql` migration adds the Tests/General placement folders, persistent admin notes, and the protected analytics function. Apply it before using those screens. Player counts come from distinct anonymous Supabase accounts recorded in `hunt_sessions`; no sample analytics are generated.
 
 Staff use email/password at `/staff-login`; guests never see this screen. For invited staff, set the Supabase **Invite user** email template button URL to:
 
@@ -39,7 +41,7 @@ where p.id = u.id
 
 ## Markerless spatial setup
 
-In **Admin → Place Craig**, first fill the camera with an existing, permanent, detailed flat area such as a menu, mural, or decorated wall. The browser captures that view as an invisible relocalization landmark. It then displays real SLAM map points; tap one to place Craig on the corresponding 3D plane, adjust his rotation and height, then use the on-model X/Y/Z arrows or the fine-position disclosure for exact world-space offsets. Complete the guided left/stop/right scan to finish. During that sweep the app automatically records additional high-quality natural reference views and stores Craig's transform relative to each one. The player can relocalize from any saved reference, then SLAM keeps Craig at the selected world position while the camera moves.
+In **Admin → Place Craig**, first fill the camera with an existing, permanent, detailed flat area such as a menu, mural, or decorated wall. The browser captures that view as an invisible relocalization landmark. It then displays real SLAM map points; tap one to place Craig on the corresponding 3D plane, adjust his rotation and height, then use the on-model X/Y/Z arrows or the fine-position disclosure for exact world-space offsets. Complete the guided left/stop/right scan to finish. During that sweep the app automatically records additional high-quality natural reference views and stores Craig's transform relative to each one. The player can relocalize from any saved reference, then SLAM keeps Craig at the selected world position while the camera moves. New placements default to the **Tests** folder; choose **General** before saving when the placement is ready for normal use.
 
 Placements created before multi-reference localization was added continue to use their original landmark. Create and activate a new placement to gain the more reliable multi-reference behavior.
 

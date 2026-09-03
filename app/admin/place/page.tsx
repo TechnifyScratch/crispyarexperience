@@ -11,7 +11,7 @@ export default async function PlacePage() {
   if (!venueResult.data || !userData.user) return <main className="admin-content"><p className="admin-error">Could not load placement data.</p></main>;
   const [mapResult, placementResult] = await Promise.all([
     supabase.from("venue_maps").select("id,version,provider,is_active,target_bundle_path").eq("venue_id", venueResult.data.id).order("version", { ascending: false }),
-    supabase.from("placements").select("id,name,status,target_index,scale,updated_at,venue_map_id,position").eq("venue_id", venueResult.data.id).order("updated_at", { ascending: false }),
+    supabase.from("placements").select("id,name,status,target_index,scale,updated_at,venue_map_id,position,folder").eq("venue_id", venueResult.data.id).order("updated_at", { ascending: false }),
   ]);
   return <AdminPlace venueId={venueResult.data.id} userId={userData.user.id} maps={mapResult.data ?? []} placements={placementResult.data ?? []} loadError={mapResult.error?.message || placementResult.error?.message || ""} />;
 }

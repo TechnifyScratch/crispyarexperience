@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Check, Save } from "lucide-react";
+import { Check, Moon, Save, Sun } from "lucide-react";
 import { createBrowserSupabase } from "@/lib/supabase/browser";
 
 type VenueSettings = {
@@ -19,6 +19,13 @@ export function SettingsEditor({ venue }: { venue: VenueSettings }) {
   const [prompt, setPrompt] = useState(venue.localization_prompt);
   const [status, setStatus] = useState<"idle" | "saving" | "saved">("idle");
   const [error, setError] = useState("");
+  const [theme, setTheme] = useState<"light" | "dark">(() => typeof window !== "undefined" && window.localStorage.getItem("crispy-admin-theme") === "dark" ? "dark" : "light");
+
+  function chooseTheme(next: "light" | "dark") {
+    setTheme(next);
+    window.localStorage.setItem("crispy-admin-theme", next);
+    window.dispatchEvent(new CustomEvent("crispy-admin-theme", { detail: next }));
+  }
 
   async function save() {
     setError("");
@@ -38,6 +45,13 @@ export function SettingsEditor({ venue }: { venue: VenueSettings }) {
   return <main className="admin-content">
     <div className="admin-heading"><div><p className="eyebrow">Experience controls</p><h1>Settings</h1><p>Store-wide defaults for the Crispy Craig hunt.</p></div></div>
     {error && <p className="admin-error" role="alert">{error}</p>}
+    <section className="admin-panel theme-setting">
+      <div><strong>Admin appearance</strong><small>Saved on this device.</small></div>
+      <div className="theme-options" role="group" aria-label="Admin color theme">
+        <button type="button" aria-pressed={theme === "light"} onClick={() => chooseTheme("light")}><Sun size={16} /> Light</button>
+        <button type="button" aria-pressed={theme === "dark"} onClick={() => chooseTheme("dark")}><Moon size={16} /> Dark</button>
+      </div>
+    </section>
     <section className="admin-panel settings-form">
       <label><span><strong>Hunt enabled</strong><small>Schedule still determines the active hours.</small></span><input type="checkbox" checked={enabled} onChange={(event) => { setEnabled(event.target.checked); setStatus("idle"); }} /></label>
       <label><span><strong>Capture watermark</strong><small>Add the event name to customer captures.</small></span><input type="checkbox" checked={watermark} onChange={(event) => { setWatermark(event.target.checked); setStatus("idle"); }} /></label>

@@ -9,7 +9,8 @@ import { mountEighthWallAdmin, type EighthWallAdminMount } from "@/lib/ar/eighth
 import { cardinalDirection, readingFromEvent, requestOrientationPermission, type CompassReading } from "@/lib/ar/orientation";
 
 type VenueMap = { id: string; version: number; provider: string; is_active: boolean; target_bundle_path: string };
-type Placement = { id: string; name: string; status: string; target_index: number; scale: number; updated_at: string; venue_map_id: string; position: { snapshotUrl?: string } };
+type PlacementFolder = "tests" | "general";
+type Placement = { id: string; name: string; status: string; target_index: number; scale: number; updated_at: string; venue_map_id: string; position: { snapshotUrl?: string }; folder?: PlacementFolder };
 type Mode = "idle" | "starting" | "landmark" | "localizing" | "placement";
 type Sweep = "place" | "left" | "pause" | "right" | "done";
 type CapturedAnchor = { name: string; blob: Blob; url: string; quality: number };
@@ -92,6 +93,7 @@ export function AdminPlace({ venueId, userId, maps, placements, loadError }: { v
   const [scale, setScale] = useState(30);
   const [positionOffset, setPositionOffset] = useState<PositionOffset>({ x: 0, y: 0, z: 0 });
   const [name, setName] = useState("");
+  const [folder, setFolder] = useState<PlacementFolder>("tests");
   const [makeActive, setMakeActive] = useState(true);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -253,10 +255,10 @@ export function AdminPlace({ venueId, userId, maps, placements, loadError }: { v
       const snapshot = dataUrlToBlob(tracker.capture());
       const mapId = crypto.randomUUID();
       const version = Math.max(0, ...maps.map((map) => map.version)) + 1;
-      const folder = `${venueId}/${mapId}`;
-      const anchorPaths = new Map(capturedAnchors.map((anchor, index) => [anchor.name, `${folder}/landmark-${index}.jpg`]));
+      const storageFolder = `${venueId}/${folder}/${mapId}`;
+      const anchorPaths = new Map(capturedAnchors.map((anchor, index) => [anchor.name, `${storageFolder}/landmark-${index}.jpg`]));
       const targetPath = anchorPaths.get("crispy-landmark-0")!;
-      const snapshotPath = `${folder}/placement.jpg`;
+      const snapshotPath = `${storageFolder}/placement.jpg`;
       const uploads = await Promise.all([
         ...capturedAnchors.map((anchor) => supabase.storage.from("ar-maps").upload(anchorPaths.get(anchor.name)!, anchor.blob, { contentType: "image/jpeg", upsert: false })),
         supabase.storage.from("ar-maps").upload(snapshotPath, snapshot, { contentType: "image/jpeg", upsert: false }),
@@ -284,7 +286,7 @@ export function AdminPlace({ venueId, userId, maps, placements, loadError }: { v
         const { data } = supabase.storage.from("ar-maps").getPublicUrl(path);
         return { ...anchor, imageUrl: data.publicUrl, quality: captured.quality };
       });
-      const { error: placementError } = await supabase.from("placements").insert({ venue_id: venueId, venue_map_id: mapId, name: name.trim(), status: makeActive ? "active" : "draft", target_index: 0, position: nextPlacement.position, rotation: nextPlacement.rotation, scale: nextPlacement.scale, created_by: userId, activated_at: makeActive ? new Date().toISOString() : null });
+      const { error: placementError } = await supabase.from("placements").insert({ venue_id: venueId, venue_map_id: mapId, name: name.trim(), folder, status: makeActive ? "active" : "draft", target_index: 0, position: nextPlacement.position, rotation: nextPlacement.rotation, scale: nextPlacement.scale, created_by: userId, activated_at: makeActive ? new Date().toISOString() : null });
       if (placementError) throw placementError;
       setSaved(true);
       router.refresh();
@@ -320,6 +322,7 @@ export function AdminPlace({ venueId, userId, maps, placements, loadError }: { v
         <aside className="placement-controls">
           <div className="control-heading"><div><strong>New hiding place</strong><span>{sweep === "done" ? "Ready to save" : "Spatial calibration"}</span></div></div>
           <label><span>Name</span><input type="text" placeholder="e.g. Front counter corner" value={name} onChange={(event) => { setName(event.target.value); setSaved(false); }} /></label>
+          <label><span>Folder</span><select value={folder} onChange={(event) => { setFolder(event.target.value as PlacementFolder); setSaved(false); }}><option value="tests">Tests</option><option value="general">General</option></select></label>
           <label><span><RotateCw size={18} /> Craig rotation</span><output>{rotation}°</output><input type="range" min="-180" max="180" value={rotation} onChange={(event) => setRotation(Number(event.target.value))} /></label>
           <label><span><Crosshair size={18} /> Craig height</span><output>{scale} cm</output><input type="range" min="12" max="60" value={scale} onChange={(event) => setScale(Number(event.target.value))} /></label>
           <details className="position-fine-tuning">
@@ -338,7 +341,7 @@ export function AdminPlace({ venueId, userId, maps, placements, loadError }: { v
           <label className="placement-checkbox"><input type="checkbox" checked={makeActive} onChange={(event) => setMakeActive(event.target.checked)} /> Make this the active hiding place</label>
         </aside>
       </div>
-      <section className="admin-panel"><div className="panel-heading"><div><h2>Saved placements</h2><p>Click a placement to see where Craig was hidden.</p></div></div>{placements.length === 0 && <p>No placements saved yet.</p>}{placements.map((item) => <details className="placement-record" key={item.id}><summary><span><strong>{item.name}</strong><small>{maps.find((map) => map.id === item.venue_map_id)?.provider ?? "AR"} map {maps.find((map) => map.id === item.venue_map_id)?.version ?? "?"} · scale {item.scale}</small></span><b>{item.status}</b></summary>{item.position?.snapshotUrl ? <img src={item.position.snapshotUrl} alt={`Saved view of ${item.name}`} /> : <p>This older placement does not have a saved screenshot.</p>}</details>)}</section>
+      <section className="admin-panel"><div className="panel-heading"><div><h2>Saved placements</h2><p>Click a placement to see where Craig was hidden.</p></div></div>{placements.length === 0 && <p>No placements saved yet.</p>}{(["tests", "general"] as const).map((group) => { const items = placements.filter((item) => (item.folder ?? "general") === group); return <div className="placement-folder" key={group}><h3>{group === "tests" ? "Tests" : "General"} <span>{items.length}</span></h3>{items.length === 0 ? <p>Nothing in this folder.</p> : items.map((item) => <details className="placement-record" key={item.id}><summary><span><strong>{item.name}</strong><small>{maps.find((map) => map.id === item.venue_map_id)?.provider ?? "AR"} map {maps.find((map) => map.id === item.venue_map_id)?.version ?? "?"} · scale {item.scale}</small></span><b>{item.status}</b></summary>{item.position?.snapshotUrl ? <img src={item.position.snapshotUrl} alt={`Saved view of ${item.name}`} /> : <p>This older placement does not have a saved screenshot.</p>}</details>)}</div>; })}</section>
     </main>
   );
 }

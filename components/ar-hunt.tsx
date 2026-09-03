@@ -3,12 +3,15 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Camera, Check, Download, LoaderCircle, Share2, X } from "lucide-react";
 import type { ImagePlacement } from "@/lib/ar/mindar-provider";
+import { createBrowserSupabase } from "@/lib/supabase/browser";
 
 type CameraState = "idle" | "starting" | "ready" | "denied" | "unavailable";
 type ArHuntProps = {
   tracking?: { imageTargetSrc: string; targetIndex: number; placement: ImagePlacement; provider?: string };
   prizeMessage?: string;
   watermark?: boolean;
+  venueId?: string;
+  placementId?: string;
 };
 
 function formatElapsed(totalSeconds: number) {
@@ -18,13 +21,14 @@ function formatElapsed(totalSeconds: number) {
   return `${hours}:${minutes}:${seconds}`;
 }
 
-export function ArHunt({ tracking, prizeMessage = "Show this screen when you order.", watermark = true }: ArHuntProps) {
+export function ArHunt({ tracking, prizeMessage = "Show this screen when you order.", watermark = true, venueId, placementId }: ArHuntProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const overlayRef = useRef<HTMLCanvasElement>(null);
   const captureVideoRef = useRef<HTMLVideoElement | null>(null);
   const captureCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const rendererCleanupRef = useRef<(() => void) | null>(null);
+  const sessionRecordedRef = useRef(false);
   const combinedCanvasRef = useRef(false);
   const startedRef = useRef(false);
   const [cameraState, setCameraState] = useState<CameraState>("idle");
@@ -83,6 +87,29 @@ export function ArHunt({ tracking, prizeMessage = "Show this screen when you ord
     startedRef.current = true;
     void startCamera();
   }, [startCamera]);
+
+  useEffect(() => {
+    if (!venueId || sessionRecordedRef.current) return;
+    let cancelled = false;
+    const record = async () => {
+      const supabase = createBrowserSupabase();
+      if (!supabase) return;
+      const { data } = await supabase.auth.getUser();
+      if (!data.user) return;
+      for (let attempt = 0; attempt < 3 && !cancelled; attempt += 1) {
+        const { error } = await supabase.from("hunt_sessions").insert({
+          venue_id: venueId,
+          user_id: data.user.id,
+          placement_id: placementId ?? null,
+          client_metadata: { arProvider: tracking?.provider ?? "camera" },
+        });
+        if (!error) { sessionRecordedRef.current = true; return; }
+        await new Promise((resolve) => window.setTimeout(resolve, 500 * (attempt + 1)));
+      }
+    };
+    void record();
+    return () => { cancelled = true; };
+  }, [placementId, tracking?.provider, venueId]);
 
   useEffect(() => {
     if (cameraState !== "ready") return;

@@ -18,12 +18,14 @@ export default async function PlayPage() {
     return <main className="closed-page"><section className="closed-experience"><Image className="closed-logo" src="/images/crispy-cones-experiences-logo.webp" alt="Crispy Cones Experiences" width={720} height={377} priority /><div className="closed-copy"><p className="eyebrow">The hunt is resting</p><h1>Craig will hide again soon.</h1><p>Check back during the next scheduled hunt.</p><Link href="/">Back home</Link></div><Image className="closed-craig" src="/images/crispy-craig.webp" alt="Crispy Craig peeking into view" width={900} height={900} priority /></section></main>;
   }
 
-  const placement = hunt.placement as ImagePlacement;
+  const placement = hunt.placement as ImagePlacement & { id: string };
   const imageTargetSrc = (hunt.map?.targetBundlePath ?? process.env.NEXT_PUBLIC_MINDAR_TARGETS) as string | undefined;
   const provider = hunt.map?.provider as string | undefined;
 
   return <ArHunt
     tracking={imageTargetSrc ? { imageTargetSrc, targetIndex: placement.targetIndex ?? 0, placement, provider } : undefined}
+    venueId={hunt.venueId as string}
+    placementId={placement.id}
     prizeMessage={hunt.prizeMessage as string | undefined}
     watermark={hunt.captureWatermark as boolean | undefined}
   />;
