@@ -39,7 +39,7 @@ where p.id = u.id
 
 ## Markerless spatial setup
 
-In **Admin → Place Craig**, first fill the camera with an existing, permanent, detailed flat area such as a menu, mural, or decorated wall. The browser captures that view as an invisible relocalization landmark. It then displays real SLAM map points; tap one to place Craig on the corresponding 3D plane, adjust his rotation and height, and complete the guided left/stop/right scan. During that unchanged sweep the app automatically records additional high-quality natural reference views and stores Craig's transform relative to each one. The player can relocalize from any saved reference, then SLAM keeps Craig at the selected world position while the camera moves.
+In **Admin → Place Craig**, first fill the camera with an existing, permanent, detailed flat area such as a menu, mural, or decorated wall. The browser captures that view as an invisible relocalization landmark. It then displays real SLAM map points; tap one to place Craig on the corresponding 3D plane, adjust his rotation and height, then use the on-model X/Y/Z arrows or the fine-position disclosure for exact world-space offsets. Complete the guided left/stop/right scan to finish. During that sweep the app automatically records additional high-quality natural reference views and stores Craig's transform relative to each one. The player can relocalize from any saved reference, then SLAM keeps Craig at the selected world position while the camera moves.
 
 Placements created before multi-reference localization was added continue to use their original landmark. Create and activate a new placement to gain the more reliable multi-reference behavior.
 

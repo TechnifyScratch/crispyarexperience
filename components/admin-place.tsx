@@ -13,6 +13,7 @@ type Placement = { id: string; name: string; status: string; target_index: numbe
 type Mode = "idle" | "starting" | "landmark" | "localizing" | "placement";
 type Sweep = "place" | "left" | "pause" | "right" | "done";
 type CapturedAnchor = { name: string; blob: Blob; url: string; quality: number };
+type PositionOffset = { x: number; y: number; z: number };
 
 const SWEEP_ANGLE = Math.PI / 10;
 
@@ -89,6 +90,7 @@ export function AdminPlace({ venueId, userId, maps, placements, loadError }: { v
   const [surfacePoints, setSurfacePoints] = useState(0);
   const [rotation, setRotation] = useState(0);
   const [scale, setScale] = useState(30);
+  const [positionOffset, setPositionOffset] = useState<PositionOffset>({ x: 0, y: 0, z: 0 });
   const [name, setName] = useState("");
   const [makeActive, setMakeActive] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -169,6 +171,10 @@ export function AdminPlace({ venueId, userId, maps, placements, loadError }: { v
         onTrackingLost: () => undefined,
         onPose: handlePose,
         onSurfacePoints: setSurfacePoints,
+        onPositionOffset: (offset) => {
+          setPositionOffset({ x: Math.round(offset.x * 1000) / 10, y: Math.round(offset.y * 1000) / 10, z: Math.round(offset.z * 1000) / 10 });
+          setSaved(false);
+        },
       });
     } catch (reason) {
       setMode("idle");
@@ -201,7 +207,9 @@ export function AdminPlace({ venueId, userId, maps, placements, loadError }: { v
 
   function placeCraig(event: React.PointerEvent<HTMLCanvasElement>) {
     if (mode !== "placement") return;
-    const placed = trackerRef.current?.placeAt(event.clientX, event.clientY);
+    const tracker = trackerRef.current;
+    if (tracker?.consumeTransformInteraction()) return;
+    const placed = tracker?.placeAt(event.clientX, event.clientY);
     if (!placed) {
       setError("No mapped surface was found there. Move slowly so green tracking points appear, then tap one.");
       return;
@@ -211,6 +219,14 @@ export function AdminPlace({ venueId, userId, maps, placements, loadError }: { v
     sweepOriginRef.current = yawRef.current ?? 0;
     sweepXOriginRef.current = cameraXRef.current;
     setSweep("left");
+  }
+
+  function updatePositionOffset(axis: keyof PositionOffset, value: number) {
+    const bounded = Math.max(-200, Math.min(200, Number.isFinite(value) ? value : 0));
+    const next = { ...positionOffset, [axis]: bounded };
+    setPositionOffset(next);
+    setSaved(false);
+    trackerRef.current?.setPositionOffset({ x: next.x / 100, y: next.y / 100, z: next.z / 100 });
   }
 
   async function savePlacement() {
@@ -306,6 +322,17 @@ export function AdminPlace({ venueId, userId, maps, placements, loadError }: { v
           <label><span>Name</span><input type="text" placeholder="e.g. Front counter corner" value={name} onChange={(event) => { setName(event.target.value); setSaved(false); }} /></label>
           <label><span><RotateCw size={18} /> Craig rotation</span><output>{rotation}°</output><input type="range" min="-180" max="180" value={rotation} onChange={(event) => setRotation(Number(event.target.value))} /></label>
           <label><span><Crosshair size={18} /> Craig height</span><output>{scale} cm</output><input type="range" min="12" max="60" value={scale} onChange={(event) => setScale(Number(event.target.value))} /></label>
+          <details className="position-fine-tuning">
+            <summary>Fine position (X / Y / Z)</summary>
+            <p>Drag the red, green, and blue arrows on Craig, or enter exact offsets here.</p>
+            {(["x", "y", "z"] as const).map((axis) => <label key={axis}><span>{axis.toUpperCase()} · {axis === "x" ? "left/right" : axis === "y" ? "up/down" : "forward/back"}</span><input type="number" min="-200" max="200" step="1" value={positionOffset[axis]} onChange={(event) => updatePositionOffset(axis, Number(event.target.value))} /><small>cm</small></label>)}
+            <button type="button" onClick={() => {
+              const reset = { x: 0, y: 0, z: 0 };
+              setPositionOffset(reset);
+              trackerRef.current?.setPositionOffset(reset);
+              setSaved(false);
+            }}>Reset offsets</button>
+          </details>
           <p className="placement-disclosure">Green dots are real SLAM map points. The outlined square sits in 3D perspective on the selected plane, and Craig’s feet remain locked to it.</p>
           <button className="admin-primary save-placement" disabled={saving || sweep !== "done"} onClick={savePlacement}>{saved ? <><Check size={18} /> Saved in Supabase</> : <><Save size={18} /> {saving ? "Saving…" : "Save hiding place"}</>}</button>
           <label className="placement-checkbox"><input type="checkbox" checked={makeActive} onChange={(event) => setMakeActive(event.target.checked)} /> Make this the active hiding place</label>

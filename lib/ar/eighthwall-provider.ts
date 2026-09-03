@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
+import { TransformControls } from "three/examples/jsm/controls/TransformControls.js";
 import type { ImagePlacement, SpatialAnchor } from "@/lib/ar/mindar-provider";
 
 type Vec3 = { x: number; y: number; z: number };
@@ -64,7 +65,9 @@ export type EighthWallMount = {
 export type EighthWallAdminMount = EighthWallMount & {
   setTarget: (imageUrl: string, width: number, height: number) => void;
   addTarget: (name: string, imageUrl: string, width: number, height: number) => void;
+  consumeTransformInteraction: () => boolean;
   placeAt: (clientX: number, clientY: number) => boolean;
+  setPositionOffset: (offset: Vec3) => void;
   updateCraig: (sizeM: number, yaw: number) => void;
   getPlacement: () => ImagePlacement | null;
   getAnchorPlacements: () => Omit<SpatialAnchor, "imageUrl">[];
@@ -187,6 +190,7 @@ async function mount(options: {
   onLocalizationProgress?: (progress: number) => void;
   onPose?: (yaw: number, position?: Vec3) => void;
   onSurfacePoints?: (count: number) => void;
+  onPositionOffset?: (offset: Vec3) => void;
 }): Promise<EighthWallMount | EighthWallAdminMount> {
   const [XR8, craig] = await Promise.all([loadRuntime(), createCraig()]);
   const canvas = options.canvas;
@@ -201,6 +205,7 @@ async function mount(options: {
   const visibleTargets = new Set<string>();
   const candidates = new Map<string, LocalizationCandidate>();
   let selectedWorld: THREE.Vector3 | null = null;
+  let baseWorld: THREE.Vector3 | null = null;
   let sizeM = options.placement?.scale ?? 0.3;
   let yaw = 0;
   let targetVisible = false;
@@ -211,6 +216,9 @@ async function mount(options: {
   let supportCandidateFrames = 0;
   let outline: THREE.LineSegments | null = null;
   let pointCloud: THREE.Points | null = null;
+  let transformControls: TransformControls | null = null;
+  let transformHelper: THREE.Object3D | null = null;
+  let lastTransformInteraction = 0;
   const relativeMatrix = new THREE.Matrix4();
 
   craig.visible = false;
@@ -370,6 +378,26 @@ async function mount(options: {
       key.position.set(-2, 4, 2);
       key.castShadow = true;
       scene.add(key, craig);
+      if (options.admin) {
+        transformControls = new TransformControls(camera, canvas);
+        transformControls.setMode("translate");
+        transformControls.setSpace("world");
+        transformControls.setSize(0.72);
+        transformControls.addEventListener("mouseDown", () => { lastTransformInteraction = performance.now(); });
+        transformControls.addEventListener("mouseUp", () => { lastTransformInteraction = performance.now(); });
+        transformControls.addEventListener("objectChange", () => {
+          lastTransformInteraction = performance.now();
+          if (!baseWorld) return;
+          selectedWorld = craig.position.clone();
+          options.onPositionOffset?.({
+            x: selectedWorld.x - baseWorld.x,
+            y: selectedWorld.y - baseWorld.y,
+            z: selectedWorld.z - baseWorld.z,
+          });
+        });
+        transformHelper = transformControls.getHelper();
+        scene.add(transformHelper);
+      }
       camera.position.set(0, 1.6, 0);
       XR8.XrController.updateCameraProjectionMatrix({ origin: camera.position, facing: camera.quaternion });
     },
@@ -466,6 +494,9 @@ async function mount(options: {
   });
 
   const cleanup = () => {
+    transformControls?.detach();
+    transformControls?.dispose();
+    if (transformHelper) scene?.remove(transformHelper);
     try { XR8.stop(); } catch { /* already stopped */ }
     try { XR8.removeCameraPipelineModules(modules); } catch { /* already removed */ }
     scene?.traverse((object) => {
@@ -510,6 +541,7 @@ async function mount(options: {
       else targetDefinitions.push(definition);
       XR8.XrController.configure({ imageTargetData: targetData(targetDefinitions) });
     },
+    consumeTransformInteraction: () => transformControls?.dragging === true || performance.now() - lastTransformInteraction < 260,
     placeAt: (clientX, clientY) => {
       if (!camera || !scene || !targetMatrix || points.length === 0) return false;
       const rect = canvas.getBoundingClientRect();
@@ -530,10 +562,13 @@ async function mount(options: {
       const surfaceY = neighbors.length >= 4 ? neighbors.reduce((sum, point) => sum + point.y, 0) / neighbors.length : best.point.y;
       selectedWorld = best.point.clone();
       selectedWorld.y = surfaceY;
+      baseWorld = selectedWorld.clone();
       craig.position.copy(selectedWorld);
       craig.rotation.set(0, yaw, 0);
       craig.scale.setScalar(sizeM);
       craig.visible = true;
+      transformControls?.attach(craig);
+      options.onPositionOffset?.({ x: 0, y: 0, z: 0 });
       if (outline) scene.remove(outline);
       const geometry = new THREE.EdgesGeometry(new THREE.PlaneGeometry(0.62, 0.62));
       outline = new THREE.LineSegments(geometry, new THREE.LineBasicMaterial({ color: 0x70ffb0, transparent: true, opacity: 0.92 }));
@@ -542,6 +577,12 @@ async function mount(options: {
       outline.position.y += 0.003;
       scene.add(outline);
       return true;
+    },
+    setPositionOffset: (offset) => {
+      if (!baseWorld) return;
+      craig.position.set(baseWorld.x + offset.x, baseWorld.y + offset.y, baseWorld.z + offset.z);
+      selectedWorld = craig.position.clone();
+      lastTransformInteraction = performance.now();
     },
     updateCraig: (nextSize, nextYaw) => {
       sizeM = nextSize;
@@ -599,6 +640,7 @@ export function mountEighthWallAdmin(options: {
   onTrackingLost?: () => void;
   onPose: (yaw: number, position?: Vec3) => void;
   onSurfacePoints: (count: number) => void;
+  onPositionOffset?: (offset: Vec3) => void;
 }) {
   return mount({ ...options, admin: true }) as Promise<EighthWallAdminMount>;
 }
