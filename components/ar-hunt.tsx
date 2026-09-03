@@ -30,6 +30,7 @@ export function ArHunt({ tracking, prizeMessage = "Show this screen when you ord
   const startedRef = useRef(false);
   const [cameraState, setCameraState] = useState<CameraState>("idle");
   const [targetVisible, setTargetVisible] = useState(false);
+  const [localizationProgress, setLocalizationProgress] = useState(0);
   const [elapsed, setElapsed] = useState(0);
   const [capturedUrl, setCapturedUrl] = useState<string | null>(null);
   const [sharing, setSharing] = useState(false);
@@ -47,7 +48,13 @@ export function ArHunt({ tracking, prizeMessage = "Show this screen when you ord
           const canvas = overlayRef.current;
           if (!canvas) throw new Error("Spatial canvas is unavailable.");
           const { mountEighthWallHunt } = await import("@/lib/ar/eighthwall-provider");
-          const mounted = await mountEighthWallHunt({ canvas, ...tracking, onLocalized: () => setTargetVisible(true) });
+          const mounted = await mountEighthWallHunt({
+            canvas,
+            ...tracking,
+            onLocalized: () => { setLocalizationProgress(1); setTargetVisible(true); },
+            onTrackingLost: () => { setLocalizationProgress(0); setTargetVisible(false); },
+            onLocalizationProgress: setLocalizationProgress,
+          });
           combinedCanvasRef.current = true;
           captureVideoRef.current = mounted.video;
           captureCanvasRef.current = mounted.canvas;
@@ -164,7 +171,7 @@ export function ArHunt({ tracking, prizeMessage = "Show this screen when you ord
       <div className="ar-camera-frame" ref={hostRef}>
         <video ref={videoRef} className={`camera-feed ${tracking && tracking.provider !== "8thwall" ? "provider-placeholder" : ""}`} muted playsInline />
         <canvas ref={overlayRef} className={`ar-overlay ${tracking && tracking.provider !== "8thwall" ? "provider-placeholder" : ""}`} />
-        {tracking && cameraState === "ready" && !targetVisible && <div className="scan-prompt">{expectedHeading != null && heading != null ? `${Math.abs(signedAngleDifference(expectedHeading, heading)) < 35 ? "You’re facing the hiding area — scan slowly" : `Turn toward ${cardinalDirection(expectedHeading)}`} · ${Math.round(heading)}° ${cardinalDirection(heading)}` : "Look around slowly…"}</div>}
+        {tracking && cameraState === "ready" && !targetVisible && <div className="scan-prompt">{localizationProgress > 0 ? `Confirming exact location… ${Math.round(localizationProgress * 100)}%` : expectedHeading != null && heading != null ? `${Math.abs(signedAngleDifference(expectedHeading, heading)) < 35 ? "You’re facing the hiding area — scan slowly" : `Turn toward ${cardinalDirection(expectedHeading)}`} · ${Math.round(heading)}° ${cardinalDirection(heading)}` : "Look around slowly…"}</div>}
         {tracking && cameraState === "ready" && expectedHeading != null && !compassEnabled && <button className="compass-button" onClick={enableCompass}><Compass size={17} /> Use direction</button>}
         {tracking?.provider === "8thwall" && <a className="eighthwall-credit" href="https://www.8thwall.org/" target="_blank" rel="noreferrer">Powered by 8th Wall</a>}
         {cameraState === "starting" && <div className="camera-message"><LoaderCircle className="spin" size={28} /><strong>Starting your camera…</strong></div>}

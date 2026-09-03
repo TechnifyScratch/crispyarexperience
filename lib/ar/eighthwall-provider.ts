@@ -17,7 +17,7 @@ type PipelineModule = {
   name: string;
   onStart?: (args: { canvas: HTMLCanvasElement }) => void;
   onAttach?: (args: { video?: HTMLVideoElement }) => void;
-  onUpdate?: (args: { processCpuResult?: { reality?: { worldPoints?: WorldPoint[]; position?: Vec3; rotation?: Quat } } }) => void;
+  onUpdate?: (args: { processCpuResult?: { reality?: { worldPoints?: WorldPoint[]; position?: Vec3; rotation?: Quat; trackingStatus?: string; trackingReason?: string } } }) => void;
   listeners?: { event: string; process: (args: { detail: ImageEvent }) => void }[];
 };
 type XR8Runtime = {
@@ -135,6 +135,7 @@ async function mount(options: {
   onReady?: () => void;
   onLocalized?: () => void;
   onTrackingLost?: () => void;
+  onLocalizationProgress?: (progress: number) => void;
   onPose?: (yaw: number, position?: Vec3) => void;
   onSurfacePoints?: (count: number) => void;
 }): Promise<EighthWallMount | EighthWallAdminMount> {
@@ -150,6 +151,12 @@ async function mount(options: {
   let yaw = 0;
   let targetVisible = false;
   let localized = false;
+  let trackingNormal = false;
+  let stableFrames = 0;
+  let stableStartedAt = 0;
+  let candidatePosition: THREE.Vector3 | null = null;
+  let candidateRotation: THREE.Quaternion | null = null;
+  let candidateScale = 1;
   let outline: THREE.LineSegments | null = null;
   let pointCloud: THREE.Points | null = null;
   const relativeMatrix = new THREE.Matrix4();
@@ -157,23 +164,81 @@ async function mount(options: {
   craig.visible = false;
   craig.matrixAutoUpdate = true;
 
+  const placePlayerCraig = (matrix: THREE.Matrix4) => {
+    if (!options.placement) return;
+    targetMatrix = matrix;
+    relativeMatrix.compose(
+      new THREE.Vector3(options.placement.position.x, options.placement.position.y, options.placement.position.z),
+      new THREE.Quaternion(options.placement.rotation.x, options.placement.rotation.y, options.placement.rotation.z, options.placement.rotation.w),
+      new THREE.Vector3(options.placement.scale, options.placement.scale, options.placement.scale),
+    );
+    const world = targetMatrix.clone().multiply(relativeMatrix);
+    world.decompose(craig.position, craig.quaternion, craig.scale);
+    craig.visible = trackingNormal;
+    localized = true;
+    options.onLocalizationProgress?.(1);
+    options.onLocalized?.();
+  };
+
+  const resetCandidate = () => {
+    stableFrames = 0;
+    stableStartedAt = 0;
+    candidatePosition = null;
+    candidateRotation = null;
+    options.onLocalizationProgress?.(0);
+  };
+
   const applyTarget = (detail: ImageEvent) => {
     if (detail.name !== "crispy-landmark") return;
-    targetMatrix = compose(detail);
     targetVisible = true;
-    if (options.placement) {
-      relativeMatrix.compose(
-        new THREE.Vector3(options.placement.position.x, options.placement.position.y, options.placement.position.z),
-        new THREE.Quaternion(options.placement.rotation.x, options.placement.rotation.y, options.placement.rotation.z, options.placement.rotation.w),
-        new THREE.Vector3(options.placement.scale, options.placement.scale, options.placement.scale),
-      );
-      const world = targetMatrix.clone().multiply(relativeMatrix);
-      world.decompose(craig.position, craig.quaternion, craig.scale);
-      craig.visible = true;
+    if (options.admin) {
+      targetMatrix = compose(detail);
+      if (!localized) {
+        localized = true;
+        options.onLocalized?.();
+      }
+      return;
     }
-    if (!localized) {
-      localized = true;
-      options.onLocalized?.();
+    if (localized || !trackingNormal) return;
+
+    const position = new THREE.Vector3(detail.position.x, detail.position.y, detail.position.z);
+    const rotation = new THREE.Quaternion(detail.rotation.x, detail.rotation.y, detail.rotation.z, detail.rotation.w).normalize();
+    const values = [...position.toArray(), ...rotation.toArray(), detail.scale];
+    if (!values.every(Number.isFinite) || detail.scale <= 0) {
+      resetCandidate();
+      return;
+    }
+    if (!candidatePosition || !candidateRotation) {
+      candidatePosition = position;
+      candidateRotation = rotation;
+      candidateScale = detail.scale;
+      stableFrames = 1;
+      stableStartedAt = performance.now();
+      return;
+    }
+
+    const positionDelta = candidatePosition.distanceTo(position);
+    const rotationDelta = candidateRotation.angleTo(rotation);
+    const scaleDelta = Math.abs(detail.scale - candidateScale) / Math.max(candidateScale, 0.0001);
+    if (positionDelta > 0.028 || rotationDelta > THREE.MathUtils.degToRad(2.5) || scaleDelta > 0.05) {
+      candidatePosition.copy(position);
+      candidateRotation.copy(rotation);
+      candidateScale = detail.scale;
+      stableFrames = 1;
+      stableStartedAt = performance.now();
+      options.onLocalizationProgress?.(0);
+      return;
+    }
+
+    candidatePosition.lerp(position, 0.18);
+    candidateRotation.slerp(rotation, 0.18);
+    candidateScale = THREE.MathUtils.lerp(candidateScale, detail.scale, 0.18);
+    stableFrames += 1;
+    const frameProgress = Math.min(1, stableFrames / 30);
+    const timeProgress = Math.min(1, (performance.now() - stableStartedAt) / 1000);
+    options.onLocalizationProgress?.(Math.min(frameProgress, timeProgress));
+    if (stableFrames >= 30 && performance.now() - stableStartedAt >= 1000) {
+      placePlayerCraig(new THREE.Matrix4().compose(candidatePosition, candidateRotation, new THREE.Vector3(candidateScale, candidateScale, candidateScale)));
     }
   };
 
@@ -200,6 +265,17 @@ async function mount(options: {
     onUpdate: ({ processCpuResult }) => {
       const reality = processCpuResult?.reality;
       if (!reality) return;
+      const nextNormal = reality.trackingStatus === "NORMAL" && reality.trackingReason !== "INITIALIZING";
+      if (!options.admin) {
+        if (trackingNormal && !nextNormal) {
+          craig.visible = false;
+          localized = false;
+          targetVisible = false;
+          resetCandidate();
+          options.onTrackingLost?.();
+        }
+        trackingNormal = nextNormal;
+      }
       points = reality.worldPoints ?? points;
       const poseYaw = cameraYaw(reality.rotation);
       if (poseYaw != null) options.onPose?.(poseYaw, reality.position);
@@ -217,7 +293,15 @@ async function mount(options: {
     listeners: [
       { event: "reality.imagefound", process: ({ detail }) => applyTarget(detail) },
       { event: "reality.imageupdated", process: ({ detail }) => { if (targetVisible || !localized) applyTarget(detail); } },
-      { event: "reality.imagelost", process: () => { targetVisible = false; options.onTrackingLost?.(); } },
+      { event: "reality.imagelost", process: () => {
+        targetVisible = false;
+        if (!options.admin) {
+          craig.visible = false;
+          localized = false;
+          resetCandidate();
+          options.onTrackingLost?.();
+        }
+      } },
     ],
   };
 
@@ -327,8 +411,9 @@ export function mountEighthWallHunt(options: {
   onReady?: () => void;
   onLocalized: () => void;
   onTrackingLost?: () => void;
+  onLocalizationProgress?: (progress: number) => void;
 }) {
-  return mount({ canvas: options.canvas, target: { imageUrl: options.imageTargetSrc, width: 480, height: 640 }, placement: options.placement, admin: false, onReady: options.onReady, onLocalized: options.onLocalized, onTrackingLost: options.onTrackingLost }) as Promise<EighthWallMount>;
+  return mount({ canvas: options.canvas, target: { imageUrl: options.imageTargetSrc, width: 480, height: 640 }, placement: options.placement, admin: false, onReady: options.onReady, onLocalized: options.onLocalized, onTrackingLost: options.onTrackingLost, onLocalizationProgress: options.onLocalizationProgress }) as Promise<EighthWallMount>;
 }
 
 export function mountEighthWallAdmin(options: {

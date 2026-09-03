@@ -130,11 +130,27 @@ export function AdminPlace({ venueId, userId, maps, placements, loadError }: { v
       else { sh = sw / targetRatio; sy = (video.videoHeight - sh) / 2; }
       context.drawImage(video, sx, sy, sw, sh, 0, 0, width, height);
       const image = context.getImageData(0, 0, width, height);
+      let luminanceSum = 0;
+      let luminanceSquareSum = 0;
+      let edgeSum = 0;
+      let samples = 0;
       for (let index = 0; index < image.data.length; index += 4) {
         const gray = Math.round(image.data[index] * 0.299 + image.data[index + 1] * 0.587 + image.data[index + 2] * 0.114);
         image.data[index] = gray;
         image.data[index + 1] = gray;
         image.data[index + 2] = gray;
+        if (index % 32 === 0) {
+          luminanceSum += gray;
+          luminanceSquareSum += gray * gray;
+          if (index >= width * 4) edgeSum += Math.abs(gray - image.data[index - width * 4]);
+          samples += 1;
+        }
+      }
+      const mean = luminanceSum / Math.max(samples, 1);
+      const contrast = Math.sqrt(Math.max(0, luminanceSquareSum / Math.max(samples, 1) - mean * mean));
+      const edgeDetail = edgeSum / Math.max(samples, 1);
+      if (contrast < 24 || edgeDetail < 8) {
+        throw new Error("That landmark is too plain or blurry. Move closer to one detailed flat sign, menu, or mural and try again.");
       }
       context.putImageData(image, 0, 0);
       const blob = await new Promise<Blob | null>((resolve) => output.toBlob(resolve, "image/jpeg", 0.9));
@@ -228,7 +244,7 @@ export function AdminPlace({ venueId, userId, maps, placements, loadError }: { v
           {mode === "idle" && <div className="placement-empty"><ScanLine size={38} /><h2>Map a real hiding place</h2><p>The camera builds a 3D map from the store itself.</p><button onClick={startPlacement}>Start spatial camera</button></div>}
           {mode === "starting" && <div className="camera-message"><strong>Starting spatial tracking…</strong></div>}
           {mode !== "idle" && mode !== "starting" && <div className={`tracking-status ${sweep === "done" ? "locked" : "searching"}`}>{instruction}</div>}
-          {mode === "landmark" && <button className="landmark-capture" onClick={captureLandmark}>Capture invisible landmark</button>}
+          {mode === "landmark" && <><div className="landmark-frame"><span>ONE FLAT, PERMANENT SURFACE</span></div><button className="landmark-capture" onClick={captureLandmark}>Capture invisible landmark</button></>}
           {mode === "placement" && <div className="surface-point-count"><Crosshair size={14} /> {surfacePoints} real map points</div>}
           {mode !== "idle" && <div className="placement-state"><Compass size={15} /> {reading?.isAbsolute ? `${Math.round(reading.heading)}° ${cardinalDirection(reading.heading)}` : orientationAllowed === false ? "Direction unavailable" : "Finding direction…"}</div>}
           {mode !== "idle" && <a className="eighthwall-credit" href="https://www.8thwall.org/" target="_blank" rel="noreferrer">Powered by 8th Wall</a>}

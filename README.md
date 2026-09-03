@@ -41,7 +41,7 @@ where p.id = u.id
 
 In **Admin → Place Craig**, first fill the camera with an existing, permanent, detailed flat area such as a menu, mural, or decorated wall. The browser captures that view as an invisible relocalization landmark. It then displays real SLAM map points; tap one to place Craig on the corresponding 3D plane, adjust his rotation and height, and complete the guided left/stop/right scan. Craig remains at the selected world position while the admin moves the camera.
 
-Players scan the same ordinary store area once. The landmark establishes the shared coordinate system, then SLAM keeps Craig fixed in place as the player turns and walks around. The player is never shown the landmark image, an artificial marker, or a placement puck.
+Players scan the same ordinary store area. Craig is rendered only after 8th Wall reports normal SLAM tracking and the landmark pose remains stable across a sustained series of frames. If either the landmark or world tracking is lost, Craig is hidden immediately instead of being shown at an uncertain position. The player is never shown the landmark image, an artificial marker, or a placement puck.
 
 If saving reports a bucket or file-type error, run both `202609020001_ar_scan_storage.sql` and `202609020002_placement_snapshots.sql` in the SQL Editor of the same Supabase project used by Vercel. These create the public `ar-maps` bucket, enable JPEG placement references, and install admin-only write policies; deploying to Vercel does not apply Supabase migrations.
 
