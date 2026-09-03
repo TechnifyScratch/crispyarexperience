@@ -214,6 +214,8 @@ async function mount(options: {
   let anchoredPosition: THREE.Vector3 | null = null;
   let supportCandidateY: number | null = null;
   let supportCandidateFrames = 0;
+  let placementFinalized = false;
+  let surfaceDecisionDeadline = 0;
   let outline: THREE.LineSegments | null = null;
   let pointCloud: THREE.Points | null = null;
   let transformControls: TransformControls | null = null;
@@ -246,28 +248,42 @@ async function mount(options: {
     anchoredPosition = worldPosition.clone();
     supportCandidateY = null;
     supportCandidateFrames = 0;
-    craig.visible = trackingNormal;
+    placementFinalized = false;
+    surfaceDecisionDeadline = performance.now() + 700;
+    // Do not reveal Craig while surface detection is still deciding. A visible
+    // model must never slide between changing point-cloud estimates.
+    craig.visible = false;
     localized = true;
+    options.onLocalizationProgress?.(0.9);
+  };
+
+  const finalizePlayerPlacement = (supportY?: number) => {
+    if (options.admin || placementFinalized || !localized || !trackingNormal) return;
+    if (supportY != null && Number.isFinite(supportY)) craig.position.y = supportY;
+    placementFinalized = true;
+    surfaceDecisionDeadline = 0;
+    craig.visible = true;
     options.onLocalizationProgress?.(1);
     options.onLocalized?.();
   };
 
   const settleCraigOnSurface = () => {
-    if (options.admin || !localized || !anchoredPosition) return;
+    if (options.admin || !localized || !anchoredPosition || placementFinalized) return;
     const supportY = horizontalSupportHeight(points, anchoredPosition);
     if (supportY == null) {
-      supportCandidateY = null;
-      supportCandidateFrames = 0;
+      if (performance.now() >= surfaceDecisionDeadline) finalizePlayerPlacement();
       return;
     }
     if (supportCandidateY == null || Math.abs(supportCandidateY - supportY) > 0.035) {
       supportCandidateY = supportY;
       supportCandidateFrames = 1;
+      if (performance.now() >= surfaceDecisionDeadline) finalizePlayerPlacement();
       return;
     }
     supportCandidateY = THREE.MathUtils.lerp(supportCandidateY, supportY, 0.25);
     supportCandidateFrames += 1;
-    if (supportCandidateFrames >= 5) craig.position.y = THREE.MathUtils.lerp(craig.position.y, supportCandidateY, 0.22);
+    if (supportCandidateFrames >= 5) finalizePlayerPlacement(supportCandidateY);
+    else if (performance.now() >= surfaceDecisionDeadline) finalizePlayerPlacement();
   };
 
   const resetCandidate = (name?: string) => {
@@ -432,6 +448,8 @@ async function mount(options: {
           anchoredPosition = null;
           supportCandidateY = null;
           supportCandidateFrames = 0;
+          placementFinalized = false;
+          surfaceDecisionDeadline = 0;
           visibleTargets.clear();
           resetCandidate();
           options.onTrackingLost?.();

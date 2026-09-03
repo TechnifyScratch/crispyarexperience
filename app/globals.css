@@ -806,6 +806,97 @@ h1 { margin: 0; font-family: Georgia, 'Times New Roman', serif; font-size: clamp
 .position-fine-tuning button { margin-top: 5px; padding: 4px 7px; }
 .compass-button { position: absolute; z-index: 6; top: 14px; right: 14px; padding: 9px 11px; display: flex; align-items: center; gap: 6px; border: 1px solid rgba(255,255,255,.5); border-radius: 20px; color: #fff; background: rgba(0,0,0,.65); font: 700 11px var(--player-sans); }
 
+/* One visual language across every guest-facing screen and overlay. */
+.intro-page,
+.black-login,
+.ar-page,
+.guest-entry,
+.closed-page,
+.legal-page {
+  color: #fff;
+  background: #000;
+  font-family: var(--player-display);
+}
+.intro-page button, .intro-page a,
+.black-login button, .black-login input, .black-login a,
+.ar-page button, .ar-page a,
+.guest-entry button, .guest-entry a,
+.closed-page button, .closed-page a,
+.legal-page button, .legal-page a { font-family: inherit; }
+
+.ar-page .scan-prompt,
+.ar-page .camera-message,
+.ar-page .start-card,
+.ar-page .error-card {
+  color: #fff;
+  border: 1px solid rgba(255,255,255,.24);
+  border-radius: 12px;
+  background: rgba(0,0,0,.82);
+  box-shadow: 0 18px 55px rgba(0,0,0,.38);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  font-family: var(--player-display);
+}
+.ar-page .scan-prompt { padding: 10px 15px; font-size: 14px; font-weight: 400; letter-spacing: .01em; }
+.ar-page .camera-message { padding: 24px; }
+.ar-page .camera-message strong { font: 400 25px/1.05 var(--player-display); letter-spacing: -.02em; }
+.ar-page .camera-message span,
+.ar-page .start-card span { color: rgba(255,255,255,.7); font: 400 14px/1.45 var(--player-display); }
+.ar-page .camera-message button,
+.ar-page .start-card button {
+  min-width: 138px;
+  padding: 12px 18px;
+  border: 0;
+  border-radius: 8px;
+  color: #000;
+  background: #fff;
+  font: 600 15px var(--player-display);
+}
+.ar-page > .capture-button { font-family: var(--player-display); font-weight: 600; }
+
+.capture-modal {
+  color: #fff;
+  background: #000;
+  font-family: var(--player-display);
+}
+.capture-modal::after { background: linear-gradient(transparent, rgba(0,0,0,.96)); }
+.capture-close,
+.capture-proof { border-color: rgba(255,255,255,.28); background: rgba(0,0,0,.78); }
+.capture-proof { border-radius: 12px; }
+.capture-proof strong { font: 400 22px/1.05 var(--player-display); }
+.capture-proof span { color: rgba(255,255,255,.72); font: 400 14px/1.35 var(--player-display); }
+.share-button {
+  border-radius: 9px;
+  color: #000;
+  background: #fff;
+  font: 600 17px var(--player-display);
+}
+.download-fallback { color: rgba(255,255,255,.78); font: 400 13px var(--player-display); }
+
+.guest-entry p { color: rgba(255,255,255,.7); font: 400 18px/1.35 var(--player-display); }
+.guest-entry button { border-radius: 8px; font: 600 16px var(--player-display); }
+
+.closed-copy .eyebrow,
+.closed-copy > p:last-of-type,
+.closed-copy a { font-family: var(--player-display); font-weight: 400; }
+
+.legal-page { padding: max(34px, env(safe-area-inset-top)) 20px max(34px, env(safe-area-inset-bottom)); }
+.legal-page article {
+  width: min(720px, 100%);
+  margin: 0 auto;
+  padding: clamp(24px, 7vw, 42px);
+  border: 1px solid rgba(255,255,255,.18);
+  border-radius: 14px;
+  color: #fff;
+  background: #080808;
+  box-shadow: none;
+}
+.legal-page article > a { color: rgba(255,255,255,.7); font-size: 14px; }
+.legal-page .eyebrow { color: rgba(255,255,255,.5); }
+.legal-page h1 { color: #fff; font-family: var(--player-display); font-weight: 400; }
+.legal-page h2 { color: #fff; font: 400 26px/1.1 var(--player-display); }
+.legal-page p { color: rgba(255,255,255,.7); font: 400 16px/1.6 var(--player-display); }
+
 /* Still bare-bones, but easier for staff to scan and use */
 .admin-shell { color: #202020; background: #f3f3f1; font: 14px Arial, Helvetica, sans-serif; }
 .admin-sidebar { padding: 12px 18px; display: flex !important; align-items: center; gap: 24px; background: #fff; border: 0; border-bottom: 1px solid #cfcfca; }
