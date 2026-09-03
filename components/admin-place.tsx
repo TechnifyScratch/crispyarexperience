@@ -128,17 +128,19 @@ export function AdminPlace({ venueId, userId, maps, placements, loadError }: { v
   }, []);
 
   const recordSweepAnchor = useCallback(async (name: string) => {
-    if (capturingAnchorsRef.current.has(name) || anchorBlobsRef.current.some((anchor) => anchor.name === name)) return;
+    if (anchorBlobsRef.current.some((anchor) => anchor.name === name)) return true;
+    if (capturingAnchorsRef.current.has(name)) return false;
     const tracker = trackerRef.current;
     const video = tracker?.video;
-    if (!tracker || !video?.videoWidth) return;
+    if (!tracker || !video?.videoWidth) return false;
     capturingAnchorsRef.current.add(name);
     try {
       const captured = await captureTrackingFrame(video);
-      if (captured.quality < 0.38) return;
+      if (captured.quality < 0.32) return false;
       const url = URL.createObjectURL(captured.blob);
       anchorBlobsRef.current.push({ name, blob: captured.blob, url, quality: captured.quality });
       tracker.addTarget(name, url, 480, 640);
+      return true;
     } finally {
       capturingAnchorsRef.current.delete(name);
     }
@@ -150,12 +152,15 @@ export function AdminPlace({ venueId, userId, maps, placements, loadError }: { v
     const delta = angleDifference(sweepOriginRef.current, yaw);
     const sideways = cameraXRef.current - sweepXOriginRef.current;
     if (sweepRef.current === "left" && (delta > SWEEP_ANGLE || sideways < -0.18)) {
-      void recordSweepAnchor("crispy-landmark-left");
-      setSweep("pause");
-      window.setTimeout(() => setSweep("right"), 900);
+      void recordSweepAnchor("crispy-landmark-left").then((captured) => {
+        if (!captured || sweepRef.current !== "left") return;
+        setSweep("pause");
+        window.setTimeout(() => { if (sweepRef.current === "pause") setSweep("right"); }, 900);
+      });
     } else if (sweepRef.current === "right" && (delta < -SWEEP_ANGLE || sideways > 0.18)) {
-      void recordSweepAnchor("crispy-landmark-right");
-      setSweep("done");
+      void recordSweepAnchor("crispy-landmark-right").then((captured) => {
+        if (captured && sweepRef.current === "right") setSweep("done");
+      });
     }
   }, [recordSweepAnchor, setSweep]);
 
@@ -190,11 +195,9 @@ export function AdminPlace({ venueId, userId, maps, placements, loadError }: { v
     if (!tracker || !video?.videoWidth) return;
     try {
       const { blob, contrast, edgeDetail, quality } = await captureTrackingFrame(video);
-      if (contrast < 18 || edgeDetail < 5) {
-        setError("This view has low detail, so use a closer or more textured landmark next time. Continuing with this capture.");
-      } else {
-        setError("");
-      }
+      if (quality < 0.28) { setError("This area does not have enough stable visual detail. Move closer to a textured, permanent surface and capture again."); return; }
+      if (contrast < 18 || edgeDetail < 5) setError("This view is usable but marginal. A closer, more textured landmark will recognize more reliably.");
+      else setError("");
       if (targetUrlRef.current) URL.revokeObjectURL(targetUrlRef.current);
       targetBlobRef.current = blob;
       targetUrlRef.current = URL.createObjectURL(blob);
@@ -241,7 +244,7 @@ export function AdminPlace({ venueId, userId, maps, placements, loadError }: { v
     if (!supabase) { setError("Supabase is not configured."); return; }
     setSaving(true); setSaved(false); setError("");
     try {
-      const anchorDeadline = performance.now() + 1600;
+      const anchorDeadline = performance.now() + 3500;
       while (performance.now() < anchorDeadline) {
         const registered = tracker.getAnchorPlacements().length;
         if (capturingAnchorsRef.current.size === 0 && registered >= anchorBlobsRef.current.length) break;
@@ -249,6 +252,7 @@ export function AdminPlace({ venueId, userId, maps, placements, loadError }: { v
       }
       const anchorPlacements = new Map(tracker.getAnchorPlacements().map((anchor) => [anchor.name, anchor]));
       const capturedAnchors = anchorBlobsRef.current.filter((anchor) => anchorPlacements.has(anchor.name));
+      if (capturedAnchors.length < 3) throw new Error("All three reference views must lock before saving. Point back across the scanned area slowly, then save again.");
       if (!capturedAnchors.some((anchor) => anchor.name === "crispy-landmark-0")) {
         throw new Error("The main landmark lost its spatial pose. Point back at it briefly and save again.");
       }

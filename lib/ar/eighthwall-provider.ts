@@ -14,6 +14,8 @@ type ImageEvent = {
   scaledHeight?: number;
 };
 type WorldPoint = { id: number; confidence: number; position: Vec3 };
+type TimedWorldPoint = { point: WorldPoint; seenAt: number };
+type HorizontalPlane = { y: number; sampleCount: number; deviation: number; spreadX: number; spreadZ: number; confidence: number };
 type LocalizationCandidate = {
   name: string;
   position: THREE.Vector3;
@@ -145,38 +147,60 @@ function compose(detail: ImageEvent) {
   );
 }
 
+function composeCandidateWorld(candidate: LocalizationCandidate, placement: ImagePlacement) {
+  const target = new THREE.Matrix4().compose(
+    candidate.position,
+    candidate.rotation,
+    new THREE.Vector3(candidate.scale, candidate.scale, candidate.scale),
+  );
+  const relative = new THREE.Matrix4().compose(
+    new THREE.Vector3(placement.position.x, placement.position.y, placement.position.z),
+    new THREE.Quaternion(placement.rotation.x, placement.rotation.y, placement.rotation.z, placement.rotation.w),
+    new THREE.Vector3(placement.scale, placement.scale, placement.scale),
+  );
+  return target.multiply(relative);
+}
+
 function cameraYaw(rotation?: Quat) {
   if (!rotation) return null;
   const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(new THREE.Quaternion(rotation.x, rotation.y, rotation.z, rotation.w));
   return Math.atan2(-forward.x, -forward.z);
 }
 
-function horizontalSupportHeight(worldPoints: WorldPoint[], expected: THREE.Vector3) {
+function horizontalPlaneNear(worldPoints: WorldPoint[], expected: THREE.Vector3, radius = 0.48, verticalTolerance = 0.32): HorizontalPlane | null {
   const nearby = worldPoints.filter((point) => {
     if (point.confidence <= 0) return false;
     const dx = point.position.x - expected.x;
     const dz = point.position.z - expected.z;
-    return Math.hypot(dx, dz) < 0.48 && Math.abs(point.position.y - expected.y) < 0.32;
+    return Math.hypot(dx, dz) < radius && Math.abs(point.position.y - expected.y) < verticalTolerance;
   });
   const bands = new Map<number, WorldPoint[]>();
   for (const point of nearby) {
     const band = Math.round(point.position.y / 0.035);
     bands.set(band, [...(bands.get(band) ?? []), point]);
   }
-  let best: { y: number; score: number } | null = null;
+  let best: (HorizontalPlane & { score: number }) | null = null;
   for (const band of bands.values()) {
-    if (band.length < 7) continue;
-    const meanY = band.reduce((sum, point) => sum + point.position.y, 0) / band.length;
-    const deviation = Math.sqrt(band.reduce((sum, point) => sum + (point.position.y - meanY) ** 2, 0) / band.length);
-    const xs = band.map((point) => point.position.x);
-    const zs = band.map((point) => point.position.z);
+    if (band.length < 8) continue;
+    const orderedY = band.map((point) => point.position.y).sort((a, b) => a - b);
+    const medianY = orderedY[Math.floor(orderedY.length / 2)];
+    const inliers = band.filter((point) => Math.abs(point.position.y - medianY) <= 0.022);
+    if (inliers.length < 8 || inliers.length / band.length < 0.72) continue;
+    const meanY = inliers.reduce((sum, point) => sum + point.position.y, 0) / inliers.length;
+    const deviation = Math.sqrt(inliers.reduce((sum, point) => sum + (point.position.y - meanY) ** 2, 0) / inliers.length);
+    const xs = inliers.map((point) => point.position.x);
+    const zs = inliers.map((point) => point.position.z);
     const spreadX = Math.max(...xs) - Math.min(...xs);
     const spreadZ = Math.max(...zs) - Math.min(...zs);
-    if (deviation > 0.025 || spreadX < 0.1 || spreadZ < 0.07) continue;
-    const score = Math.abs(meanY - expected.y) + deviation * 3 - Math.min(band.length, 30) * 0.001;
-    if (!best || score < best.score) best = { y: meanY, score };
+    if (deviation > 0.018 || spreadX < 0.11 || spreadZ < 0.075) continue;
+    const coverage = Math.min(1, (spreadX * spreadZ) / 0.035);
+    const density = Math.min(1, inliers.length / 24);
+    const flatness = Math.max(0, 1 - deviation / 0.018);
+    const confidence = coverage * 0.35 + density * 0.35 + flatness * 0.3;
+    const score = Math.abs(meanY - expected.y) + deviation * 4 - confidence * 0.045;
+    if (!best || score < best.score) best = { y: meanY, sampleCount: inliers.length, deviation, spreadX, spreadZ, confidence, score };
   }
-  return best?.y ?? null;
+  return best;
 }
 
 async function mount(options: {
@@ -198,6 +222,7 @@ async function mount(options: {
   let scene: THREE.Scene | null = null;
   let camera: THREE.PerspectiveCamera | null = null;
   let points: WorldPoint[] = [];
+  const pointHistory = new Map<number, TimedWorldPoint>();
   let targetMatrix: THREE.Matrix4 | null = null;
   const targetMatrices = new Map<string, THREE.Matrix4>();
   const targetDefinitions = [...(options.targets ?? [])];
@@ -206,6 +231,7 @@ async function mount(options: {
   const candidates = new Map<string, LocalizationCandidate>();
   let selectedWorld: THREE.Vector3 | null = null;
   let baseWorld: THREE.Vector3 | null = null;
+  let selectedSurface: HorizontalPlane | null = null;
   let sizeM = options.placement?.scale ?? 0.3;
   let yaw = 0;
   let targetVisible = false;
@@ -216,6 +242,7 @@ async function mount(options: {
   let supportCandidateFrames = 0;
   let placementFinalized = false;
   let surfaceDecisionDeadline = 0;
+  let surfaceRequired = false;
   let outline: THREE.LineSegments | null = null;
   let pointCloud: THREE.Points | null = null;
   let transformControls: TransformControls | null = null;
@@ -249,7 +276,8 @@ async function mount(options: {
     supportCandidateY = null;
     supportCandidateFrames = 0;
     placementFinalized = false;
-    surfaceDecisionDeadline = performance.now() + 700;
+    surfaceRequired = options.placement?.position.surface?.required === true;
+    surfaceDecisionDeadline = performance.now() + (surfaceRequired ? 4500 : 500);
     // Do not reveal Craig while surface detection is still deciding. A visible
     // model must never slide between changing point-cloud estimates.
     craig.visible = false;
@@ -269,21 +297,40 @@ async function mount(options: {
 
   const settleCraigOnSurface = () => {
     if (options.admin || !localized || !anchoredPosition || placementFinalized) return;
-    const supportY = horizontalSupportHeight(points, anchoredPosition);
-    if (supportY == null) {
-      if (performance.now() >= surfaceDecisionDeadline) finalizePlayerPlacement();
+    if (!surfaceRequired) {
+      finalizePlayerPlacement();
       return;
     }
-    if (supportCandidateY == null || Math.abs(supportCandidateY - supportY) > 0.035) {
-      supportCandidateY = supportY;
+    const surface = options.placement?.position.surface;
+    const expectedSupport = anchoredPosition.clone();
+    expectedSupport.y -= surface?.offsetM ?? 0;
+    const support = horizontalPlaneNear(points, expectedSupport, 0.44, 0.18);
+    const tolerance = surface?.toleranceM ?? 0.1;
+    if (!support || support.confidence < 0.62 || Math.abs(support.y - expectedSupport.y) > tolerance) {
+      supportCandidateY = null;
+      supportCandidateFrames = 0;
+      if (performance.now() >= surfaceDecisionDeadline) {
+        craig.visible = false;
+        localized = false;
+        anchoredPosition = null;
+        placementFinalized = false;
+        surfaceDecisionDeadline = 0;
+        candidates.clear();
+        options.onLocalizationProgress?.(0);
+        options.onTrackingLost?.();
+      }
+      return;
+    }
+    if (supportCandidateY == null || Math.abs(supportCandidateY - support.y) > 0.018) {
+      supportCandidateY = support.y;
       supportCandidateFrames = 1;
-      if (performance.now() >= surfaceDecisionDeadline) finalizePlayerPlacement();
       return;
     }
-    supportCandidateY = THREE.MathUtils.lerp(supportCandidateY, supportY, 0.25);
+    supportCandidateY = THREE.MathUtils.lerp(supportCandidateY, support.y, 0.2);
     supportCandidateFrames += 1;
-    if (supportCandidateFrames >= 5) finalizePlayerPlacement(supportCandidateY);
-    else if (performance.now() >= surfaceDecisionDeadline) finalizePlayerPlacement();
+    // The plane is a validator, not a new placement. Preserve the exact saved
+    // transform so live map noise can never move Craig after localization.
+    if (supportCandidateFrames >= 8) finalizePlayerPlacement();
   };
 
   const resetCandidate = (name?: string) => {
@@ -294,23 +341,49 @@ async function mount(options: {
 
   const confirmCandidate = () => {
     if (options.admin || localized || !targetVisible || !trackingNormal) return;
-    let best: LocalizationCandidate | null = null;
+    const stable: LocalizationCandidate[] = [];
     let bestProgress = 0;
     for (const candidate of candidates.values()) {
       if (!visibleTargets.has(candidate.name)) continue;
       const elapsed = performance.now() - candidate.startedAt;
-      const progress = Math.min(1, candidate.frames / 3, elapsed / 250);
+      const progress = Math.min(0.88, candidate.frames / 10, elapsed / 700);
       bestProgress = Math.max(bestProgress, progress);
-      if (candidate.frames >= 3 && elapsed >= 250 && (!best || candidate.frames > best.frames)) best = candidate;
+      if (candidate.frames >= 6 && elapsed >= 450) stable.push(candidate);
     }
     options.onLocalizationProgress?.(bestProgress);
+
+    let best: LocalizationCandidate | null = null;
+    if (stable.length >= 2) {
+      for (let first = 0; first < stable.length; first += 1) {
+        for (let second = first + 1; second < stable.length; second += 1) {
+          const a = stable[first];
+          const b = stable[second];
+          const aPlacement = placementByTarget.get(a.name) ?? options.placement;
+          const bPlacement = placementByTarget.get(b.name) ?? options.placement;
+          if (!aPlacement || !bPlacement) continue;
+          const aWorld = composeCandidateWorld(a, aPlacement);
+          const bWorld = composeCandidateWorld(b, bPlacement);
+          const aPosition = new THREE.Vector3(); const aRotation = new THREE.Quaternion(); const aScale = new THREE.Vector3();
+          const bPosition = new THREE.Vector3(); const bRotation = new THREE.Quaternion(); const bScale = new THREE.Vector3();
+          aWorld.decompose(aPosition, aRotation, aScale);
+          bWorld.decompose(bPosition, bRotation, bScale);
+          const scaleDelta = Math.abs(aScale.x - bScale.x) / Math.max(Math.abs(aScale.x), 0.0001);
+          if (aPosition.distanceTo(bPosition) <= 0.1 && aRotation.angleTo(bRotation) <= THREE.MathUtils.degToRad(12) && scaleDelta <= 0.14) {
+            best = a.frames >= b.frames ? a : b;
+            break;
+          }
+        }
+        if (best) break;
+      }
+    } else if (stable.length === 1) {
+      const only = stable[0];
+      const elapsed = performance.now() - only.startedAt;
+      if (visibleTargets.size === 1 && only.frames >= 10 && elapsed >= 700) best = only;
+    }
+
     if (best) {
       const placement = placementByTarget.get(best.name) ?? options.placement;
-      placePlayerCraig(new THREE.Matrix4().compose(
-        best.position,
-        best.rotation,
-        new THREE.Vector3(best.scale, best.scale, best.scale),
-      ), placement);
+      placePlayerCraig(new THREE.Matrix4().compose(best.position, best.rotation, new THREE.Vector3(best.scale, best.scale, best.scale)), placement);
     }
   };
 
@@ -356,7 +429,7 @@ async function mount(options: {
     const positionDelta = candidate.previousPosition.distanceTo(position);
     const rotationDelta = candidate.previousRotation.angleTo(rotation);
     const scaleDelta = Math.abs(detail.scale - candidate.previousScale) / Math.max(candidate.previousScale, 0.0001);
-    if (positionDelta > 0.12 || rotationDelta > THREE.MathUtils.degToRad(10) || scaleDelta > 0.2) {
+    if (positionDelta > 0.07 || rotationDelta > THREE.MathUtils.degToRad(6) || scaleDelta > 0.12) {
       candidates.set(detail.name, {
         name: detail.name,
         position,
@@ -450,6 +523,8 @@ async function mount(options: {
           supportCandidateFrames = 0;
           placementFinalized = false;
           surfaceDecisionDeadline = 0;
+          pointHistory.clear();
+          points = [];
           visibleTargets.clear();
           resetCandidate();
           options.onTrackingLost?.();
@@ -457,7 +532,10 @@ async function mount(options: {
         trackingNormal = nextNormal;
         confirmCandidate();
       }
-      points = reality.worldPoints ?? points;
+      const pointTime = performance.now();
+      for (const point of reality.worldPoints ?? []) pointHistory.set(point.id, { point, seenAt: pointTime });
+      for (const [id, stored] of pointHistory) if (pointTime - stored.seenAt > 1800) pointHistory.delete(id);
+      points = [...pointHistory.values()].map((stored) => stored.point);
       settleCraigOnSurface();
       const poseYaw = cameraYaw(reality.rotation);
       if (poseYaw != null) options.onPose?.(poseYaw, reality.position);
@@ -566,20 +644,28 @@ async function mount(options: {
       const pointer = new THREE.Vector2(((clientX - rect.left) / rect.width) * 2 - 1, -(((clientY - rect.top) / rect.height) * 2 - 1));
       const ray = new THREE.Raycaster();
       ray.setFromCamera(pointer, camera);
-      let best: { point: THREE.Vector3; miss: number } | null = null;
+      const rayCandidates: { point: THREE.Vector3; miss: number }[] = [];
       for (const item of points) {
+        if (item.confidence <= 0) continue;
         const point = new THREE.Vector3(item.position.x, item.position.y, item.position.z);
         const along = point.clone().sub(ray.ray.origin).dot(ray.ray.direction);
         if (along < 0.15 || along > 8) continue;
         const closest = ray.ray.origin.clone().addScaledVector(ray.ray.direction, along);
         const miss = closest.distanceTo(point) / along;
-        if (miss < 0.055 && (!best || miss < best.miss)) best = { point, miss };
+        if (miss < 0.06) rayCandidates.push({ point, miss });
+      }
+      rayCandidates.sort((a, b) => a.miss - b.miss);
+      let best: { point: THREE.Vector3; plane: HorizontalPlane; score: number } | null = null;
+      for (const candidate of rayCandidates.slice(0, 28)) {
+        const plane = horizontalPlaneNear(points, candidate.point, 0.34, 0.16);
+        if (!plane || plane.confidence < 0.64 || Math.abs(plane.y - candidate.point.y) > 0.1) continue;
+        const score = candidate.miss - plane.confidence * 0.018 + Math.abs(plane.y - candidate.point.y) * 0.08;
+        if (!best || score < best.score) best = { point: candidate.point, plane, score };
       }
       if (!best) return false;
-      const neighbors = points.map((item) => new THREE.Vector3(item.position.x, item.position.y, item.position.z)).filter((point) => point.distanceTo(best!.point) < 0.34);
-      const surfaceY = neighbors.length >= 4 ? neighbors.reduce((sum, point) => sum + point.y, 0) / neighbors.length : best.point.y;
       selectedWorld = best.point.clone();
-      selectedWorld.y = surfaceY;
+      selectedWorld.y = best.plane.y;
+      selectedSurface = best.plane;
       baseWorld = selectedWorld.clone();
       craig.position.copy(selectedWorld);
       craig.rotation.set(0, yaw, 0);
@@ -615,7 +701,18 @@ async function mount(options: {
       if (!placement) return null;
       return {
         targetIndex: 0,
-        position: { ...placement.position, targetIndexes: [0] },
+        position: {
+          ...placement.position,
+          targetIndexes: [0],
+          surface: selectedSurface ? {
+            kind: "horizontal",
+            required: true,
+            toleranceM: 0.1,
+            offsetM: craig.position.y - selectedSurface.y,
+            sampleCount: selectedSurface.sampleCount,
+            deviationM: selectedSurface.deviation,
+          } : undefined,
+        },
         rotation: placement.rotation,
         scale: placement.scale,
       };

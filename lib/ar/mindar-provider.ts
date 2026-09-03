@@ -13,6 +13,14 @@ export type ImagePlacement = {
     scanSpan?: number;
     snapshotUrl?: string;
     anchors?: SpatialAnchor[];
+    surface?: {
+      kind: "horizontal";
+      required: boolean;
+      toleranceM: number;
+      offsetM: number;
+      sampleCount: number;
+      deviationM: number;
+    };
   };
   rotation: { x: number; y: number; z: number; w: number };
   scale: number;
