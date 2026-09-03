@@ -149,8 +149,10 @@ export function AdminPlace({ venueId, userId, maps, placements, loadError }: { v
       const mean = luminanceSum / Math.max(samples, 1);
       const contrast = Math.sqrt(Math.max(0, luminanceSquareSum / Math.max(samples, 1) - mean * mean));
       const edgeDetail = edgeSum / Math.max(samples, 1);
-      if (contrast < 24 || edgeDetail < 8) {
-        throw new Error("That landmark is too plain or blurry. Move closer to one detailed flat sign, menu, or mural and try again.");
+      if (contrast < 18 || edgeDetail < 5) {
+        setError("This view has low detail, so use a closer or more textured landmark next time. Continuing with this capture.");
+      } else {
+        setError("");
       }
       context.putImageData(image, 0, 0);
       const blob = await new Promise<Blob | null>((resolve) => output.toBlob(resolve, "image/jpeg", 0.9));

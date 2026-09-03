@@ -16,7 +16,7 @@ type WorldPoint = { id: number; confidence: number; position: Vec3 };
 type PipelineModule = {
   name: string;
   onStart?: (args: { canvas: HTMLCanvasElement }) => void;
-  onAttach?: (args: { video?: HTMLVideoElement }) => void;
+  onAttach?: (args: { video?: HTMLVideoElement; stream?: MediaStream }) => void;
   onUpdate?: (args: { processCpuResult?: { reality?: { worldPoints?: WorldPoint[]; position?: Vec3; rotation?: Quat; trackingStatus?: string; trackingReason?: string } } }) => void;
   listeners?: { event: string; process: (args: { detail: ImageEvent }) => void }[];
 };
@@ -258,9 +258,24 @@ async function mount(options: {
       camera.position.set(0, 1.6, 0);
       XR8.XrController.updateCameraProjectionMatrix({ origin: camera.position, facing: camera.quaternion });
     },
-    onAttach: ({ video: attachedVideo }) => {
+    onAttach: ({ video: attachedVideo, stream }) => {
       if (attachedVideo) video = attachedVideo;
-      options.onReady?.();
+      const improveCamera = async () => {
+        const track = stream?.getVideoTracks()[0];
+        if (track) {
+          try {
+            await track.applyConstraints({
+              width: { ideal: 1920 },
+              height: { ideal: 1080 },
+              frameRate: { ideal: 30, min: 24 },
+            });
+          } catch {
+            // Some iOS cameras expose a fixed AR-compatible format.
+          }
+        }
+        window.setTimeout(() => options.onReady?.(), 700);
+      };
+      void improveCamera();
     },
     onUpdate: ({ processCpuResult }) => {
       const reality = processCpuResult?.reality;
@@ -304,6 +319,11 @@ async function mount(options: {
       } },
     ],
   };
+
+  const bounds = canvas.getBoundingClientRect();
+  const pixelRatio = Math.min(window.devicePixelRatio || 1, 2.5);
+  canvas.width = Math.max(720, Math.round(bounds.width * pixelRatio));
+  canvas.height = Math.max(960, Math.round(bounds.height * pixelRatio));
 
   XR8.XrController.configure({
     disableWorldTracking: false,
