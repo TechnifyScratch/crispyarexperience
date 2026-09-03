@@ -148,6 +148,34 @@ function cameraYaw(rotation?: Quat) {
   return Math.atan2(-forward.x, -forward.z);
 }
 
+function horizontalSupportHeight(worldPoints: WorldPoint[], expected: THREE.Vector3) {
+  const nearby = worldPoints.filter((point) => {
+    if (point.confidence <= 0) return false;
+    const dx = point.position.x - expected.x;
+    const dz = point.position.z - expected.z;
+    return Math.hypot(dx, dz) < 0.48 && Math.abs(point.position.y - expected.y) < 0.32;
+  });
+  const bands = new Map<number, WorldPoint[]>();
+  for (const point of nearby) {
+    const band = Math.round(point.position.y / 0.035);
+    bands.set(band, [...(bands.get(band) ?? []), point]);
+  }
+  let best: { y: number; score: number } | null = null;
+  for (const band of bands.values()) {
+    if (band.length < 7) continue;
+    const meanY = band.reduce((sum, point) => sum + point.position.y, 0) / band.length;
+    const deviation = Math.sqrt(band.reduce((sum, point) => sum + (point.position.y - meanY) ** 2, 0) / band.length);
+    const xs = band.map((point) => point.position.x);
+    const zs = band.map((point) => point.position.z);
+    const spreadX = Math.max(...xs) - Math.min(...xs);
+    const spreadZ = Math.max(...zs) - Math.min(...zs);
+    if (deviation > 0.025 || spreadX < 0.1 || spreadZ < 0.07) continue;
+    const score = Math.abs(meanY - expected.y) + deviation * 3 - Math.min(band.length, 30) * 0.001;
+    if (!best || score < best.score) best = { y: meanY, score };
+  }
+  return best?.y ?? null;
+}
+
 async function mount(options: {
   canvas: HTMLCanvasElement;
   targets?: TargetDefinition[];
@@ -178,6 +206,9 @@ async function mount(options: {
   let targetVisible = false;
   let localized = false;
   let trackingNormal = false;
+  let anchoredPosition: THREE.Vector3 | null = null;
+  let supportCandidateY: number | null = null;
+  let supportCandidateFrames = 0;
   let outline: THREE.LineSegments | null = null;
   let pointCloud: THREE.Points | null = null;
   const relativeMatrix = new THREE.Matrix4();
@@ -195,11 +226,40 @@ async function mount(options: {
       new THREE.Vector3(resolvedPlacement.scale, resolvedPlacement.scale, resolvedPlacement.scale),
     );
     const world = targetMatrix.clone().multiply(relativeMatrix);
-    world.decompose(craig.position, craig.quaternion, craig.scale);
+    const worldPosition = new THREE.Vector3();
+    const worldRotation = new THREE.Quaternion();
+    const worldScale = new THREE.Vector3();
+    world.decompose(worldPosition, worldRotation, worldScale);
+    const forward = new THREE.Vector3(0, 0, 1).applyQuaternion(worldRotation);
+    const uprightYaw = Math.atan2(forward.x, forward.z);
+    craig.position.copy(worldPosition);
+    craig.quaternion.setFromAxisAngle(new THREE.Vector3(0, 1, 0), uprightYaw);
+    craig.scale.setScalar((Math.abs(worldScale.x) + Math.abs(worldScale.y) + Math.abs(worldScale.z)) / 3);
+    anchoredPosition = worldPosition.clone();
+    supportCandidateY = null;
+    supportCandidateFrames = 0;
     craig.visible = trackingNormal;
     localized = true;
     options.onLocalizationProgress?.(1);
     options.onLocalized?.();
+  };
+
+  const settleCraigOnSurface = () => {
+    if (options.admin || !localized || !anchoredPosition) return;
+    const supportY = horizontalSupportHeight(points, anchoredPosition);
+    if (supportY == null) {
+      supportCandidateY = null;
+      supportCandidateFrames = 0;
+      return;
+    }
+    if (supportCandidateY == null || Math.abs(supportCandidateY - supportY) > 0.035) {
+      supportCandidateY = supportY;
+      supportCandidateFrames = 1;
+      return;
+    }
+    supportCandidateY = THREE.MathUtils.lerp(supportCandidateY, supportY, 0.25);
+    supportCandidateFrames += 1;
+    if (supportCandidateFrames >= 5) craig.position.y = THREE.MathUtils.lerp(craig.position.y, supportCandidateY, 0.22);
   };
 
   const resetCandidate = (name?: string) => {
@@ -341,6 +401,9 @@ async function mount(options: {
           craig.visible = false;
           localized = false;
           targetVisible = false;
+          anchoredPosition = null;
+          supportCandidateY = null;
+          supportCandidateFrames = 0;
           visibleTargets.clear();
           resetCandidate();
           options.onTrackingLost?.();
@@ -349,6 +412,7 @@ async function mount(options: {
         confirmCandidate();
       }
       points = reality.worldPoints ?? points;
+      settleCraigOnSurface();
       const poseYaw = cameraYaw(reality.rotation);
       if (poseYaw != null) options.onPose?.(poseYaw, reality.position);
       options.onSurfacePoints?.(points.length);
@@ -382,7 +446,7 @@ async function mount(options: {
 
   XR8.XrController.configure({
     disableWorldTracking: false,
-    enableWorldPoints: options.admin,
+    enableWorldPoints: true,
     enableLighting: true,
     scale: "absolute",
     imageTargetData: targetData(targetDefinitions),
