@@ -12,6 +12,7 @@ type VenueMap = { id: string; version: number; provider: string; is_active: bool
 type Placement = { id: string; name: string; status: string; target_index: number; scale: number; updated_at: string; venue_map_id: string; position: { snapshotUrl?: string } };
 type Mode = "idle" | "starting" | "landmark" | "localizing" | "placement";
 type Sweep = "place" | "left" | "pause" | "right" | "done";
+type CapturedAnchor = { name: string; blob: Blob; url: string; quality: number };
 
 const SWEEP_ANGLE = Math.PI / 10;
 
@@ -26,12 +27,54 @@ function dataUrlToBlob(dataUrl: string) {
   return new Blob([bytes], { type });
 }
 
+async function captureTrackingFrame(video: HTMLVideoElement) {
+  const width = 480;
+  const height = 640;
+  const output = document.createElement("canvas");
+  output.width = width;
+  output.height = height;
+  const context = output.getContext("2d", { willReadFrequently: true });
+  if (!context) throw new Error("The landmark image could not be captured.");
+  const sourceRatio = video.videoWidth / video.videoHeight;
+  const targetRatio = width / height;
+  let sx = 0, sy = 0, sw = video.videoWidth, sh = video.videoHeight;
+  if (sourceRatio > targetRatio) { sw = sh * targetRatio; sx = (video.videoWidth - sw) / 2; }
+  else { sh = sw / targetRatio; sy = (video.videoHeight - sh) / 2; }
+  context.drawImage(video, sx, sy, sw, sh, 0, 0, width, height);
+  const image = context.getImageData(0, 0, width, height);
+  let luminanceSum = 0;
+  let luminanceSquareSum = 0;
+  let edgeSum = 0;
+  let samples = 0;
+  for (let index = 0; index < image.data.length; index += 4) {
+    const gray = Math.round(image.data[index] * 0.299 + image.data[index + 1] * 0.587 + image.data[index + 2] * 0.114);
+    image.data[index] = gray;
+    image.data[index + 1] = gray;
+    image.data[index + 2] = gray;
+    if (index % 32 === 0) {
+      luminanceSum += gray;
+      luminanceSquareSum += gray * gray;
+      if (index >= width * 4) edgeSum += Math.abs(gray - image.data[index - width * 4]);
+      samples += 1;
+    }
+  }
+  const mean = luminanceSum / Math.max(samples, 1);
+  const contrast = Math.sqrt(Math.max(0, luminanceSquareSum / Math.max(samples, 1) - mean * mean));
+  const edgeDetail = edgeSum / Math.max(samples, 1);
+  context.putImageData(image, 0, 0);
+  const blob = await new Promise<Blob | null>((resolve) => output.toBlob(resolve, "image/jpeg", 0.9));
+  if (!blob) throw new Error("The landmark image could not be captured.");
+  return { blob, contrast, edgeDetail, quality: Math.min(1, Math.min(contrast / 36, edgeDetail / 10)) };
+}
+
 export function AdminPlace({ venueId, userId, maps, placements, loadError }: { venueId: string; userId: string; maps: VenueMap[]; placements: Placement[]; loadError: string }) {
   const router = useRouter();
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const trackerRef = useRef<EighthWallAdminMount | null>(null);
   const targetBlobRef = useRef<Blob | null>(null);
   const targetUrlRef = useRef<string | null>(null);
+  const anchorBlobsRef = useRef<CapturedAnchor[]>([]);
+  const capturingAnchorsRef = useRef(new Set<string>());
   const centerHeadingRef = useRef<CompassReading | null>(null);
   const readingRef = useRef<CompassReading | null>(null);
   const yawRef = useRef<number | null>(null);
@@ -75,6 +118,26 @@ export function AdminPlace({ venueId, userId, maps, placements, loadError }: { v
   useEffect(() => () => {
     trackerRef.current?.cleanup();
     if (targetUrlRef.current) URL.revokeObjectURL(targetUrlRef.current);
+    anchorBlobsRef.current.forEach((anchor) => {
+      if (anchor.url !== targetUrlRef.current) URL.revokeObjectURL(anchor.url);
+    });
+  }, []);
+
+  const recordSweepAnchor = useCallback(async (name: string) => {
+    if (capturingAnchorsRef.current.has(name) || anchorBlobsRef.current.some((anchor) => anchor.name === name)) return;
+    const tracker = trackerRef.current;
+    const video = tracker?.video;
+    if (!tracker || !video?.videoWidth) return;
+    capturingAnchorsRef.current.add(name);
+    try {
+      const captured = await captureTrackingFrame(video);
+      if (captured.quality < 0.38) return;
+      const url = URL.createObjectURL(captured.blob);
+      anchorBlobsRef.current.push({ name, blob: captured.blob, url, quality: captured.quality });
+      tracker.addTarget(name, url, 480, 640);
+    } finally {
+      capturingAnchorsRef.current.delete(name);
+    }
   }, []);
 
   const handlePose = useCallback((yaw: number, position?: { x: number }) => {
@@ -83,12 +146,14 @@ export function AdminPlace({ venueId, userId, maps, placements, loadError }: { v
     const delta = angleDifference(sweepOriginRef.current, yaw);
     const sideways = cameraXRef.current - sweepXOriginRef.current;
     if (sweepRef.current === "left" && (delta > SWEEP_ANGLE || sideways < -0.18)) {
+      void recordSweepAnchor("crispy-landmark-left");
       setSweep("pause");
       window.setTimeout(() => setSweep("right"), 900);
     } else if (sweepRef.current === "right" && (delta < -SWEEP_ANGLE || sideways > 0.18)) {
+      void recordSweepAnchor("crispy-landmark-right");
       setSweep("done");
     }
-  }, [setSweep]);
+  }, [recordSweepAnchor, setSweep]);
 
   async function startPlacement() {
     if (!canvasRef.current) return;
@@ -116,53 +181,19 @@ export function AdminPlace({ venueId, userId, maps, placements, loadError }: { v
     const video = tracker?.video;
     if (!tracker || !video?.videoWidth) return;
     try {
-      const width = 480;
-      const height = 640;
-      const output = document.createElement("canvas");
-      output.width = width;
-      output.height = height;
-      const context = output.getContext("2d", { willReadFrequently: true });
-      if (!context) throw new Error("The landmark image could not be captured.");
-      const sourceRatio = video.videoWidth / video.videoHeight;
-      const targetRatio = width / height;
-      let sx = 0, sy = 0, sw = video.videoWidth, sh = video.videoHeight;
-      if (sourceRatio > targetRatio) { sw = sh * targetRatio; sx = (video.videoWidth - sw) / 2; }
-      else { sh = sw / targetRatio; sy = (video.videoHeight - sh) / 2; }
-      context.drawImage(video, sx, sy, sw, sh, 0, 0, width, height);
-      const image = context.getImageData(0, 0, width, height);
-      let luminanceSum = 0;
-      let luminanceSquareSum = 0;
-      let edgeSum = 0;
-      let samples = 0;
-      for (let index = 0; index < image.data.length; index += 4) {
-        const gray = Math.round(image.data[index] * 0.299 + image.data[index + 1] * 0.587 + image.data[index + 2] * 0.114);
-        image.data[index] = gray;
-        image.data[index + 1] = gray;
-        image.data[index + 2] = gray;
-        if (index % 32 === 0) {
-          luminanceSum += gray;
-          luminanceSquareSum += gray * gray;
-          if (index >= width * 4) edgeSum += Math.abs(gray - image.data[index - width * 4]);
-          samples += 1;
-        }
-      }
-      const mean = luminanceSum / Math.max(samples, 1);
-      const contrast = Math.sqrt(Math.max(0, luminanceSquareSum / Math.max(samples, 1) - mean * mean));
-      const edgeDetail = edgeSum / Math.max(samples, 1);
+      const { blob, contrast, edgeDetail, quality } = await captureTrackingFrame(video);
       if (contrast < 18 || edgeDetail < 5) {
         setError("This view has low detail, so use a closer or more textured landmark next time. Continuing with this capture.");
       } else {
         setError("");
       }
-      context.putImageData(image, 0, 0);
-      const blob = await new Promise<Blob | null>((resolve) => output.toBlob(resolve, "image/jpeg", 0.9));
-      if (!blob) throw new Error("The landmark image could not be captured.");
       if (targetUrlRef.current) URL.revokeObjectURL(targetUrlRef.current);
       targetBlobRef.current = blob;
       targetUrlRef.current = URL.createObjectURL(blob);
+      anchorBlobsRef.current = [{ name: "crispy-landmark-0", blob, url: targetUrlRef.current, quality }];
       centerHeadingRef.current = readingRef.current;
       setMode("localizing");
-      tracker.setTarget(targetUrlRef.current, width, height);
+      tracker.setTarget(targetUrlRef.current, 480, 640);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "The landmark could not be captured.");
     }
@@ -192,17 +223,30 @@ export function AdminPlace({ venueId, userId, maps, placements, loadError }: { v
     if (!supabase) { setError("Supabase is not configured."); return; }
     setSaving(true); setSaved(false); setError("");
     try {
+      const anchorDeadline = performance.now() + 1600;
+      while (performance.now() < anchorDeadline) {
+        const registered = tracker.getAnchorPlacements().length;
+        if (capturingAnchorsRef.current.size === 0 && registered >= anchorBlobsRef.current.length) break;
+        await new Promise((resolve) => window.setTimeout(resolve, 100));
+      }
+      const anchorPlacements = new Map(tracker.getAnchorPlacements().map((anchor) => [anchor.name, anchor]));
+      const capturedAnchors = anchorBlobsRef.current.filter((anchor) => anchorPlacements.has(anchor.name));
+      if (!capturedAnchors.some((anchor) => anchor.name === "crispy-landmark-0")) {
+        throw new Error("The main landmark lost its spatial pose. Point back at it briefly and save again.");
+      }
       const snapshot = dataUrlToBlob(tracker.capture());
       const mapId = crypto.randomUUID();
       const version = Math.max(0, ...maps.map((map) => map.version)) + 1;
       const folder = `${venueId}/${mapId}`;
-      const targetPath = `${folder}/landmark.jpg`;
+      const anchorPaths = new Map(capturedAnchors.map((anchor, index) => [anchor.name, `${folder}/landmark-${index}.jpg`]));
+      const targetPath = anchorPaths.get("crispy-landmark-0")!;
       const snapshotPath = `${folder}/placement.jpg`;
-      const [targetUpload, snapshotUpload] = await Promise.all([
-        supabase.storage.from("ar-maps").upload(targetPath, target, { contentType: "image/jpeg", upsert: false }),
+      const uploads = await Promise.all([
+        ...capturedAnchors.map((anchor) => supabase.storage.from("ar-maps").upload(anchorPaths.get(anchor.name)!, anchor.blob, { contentType: "image/jpeg", upsert: false })),
         supabase.storage.from("ar-maps").upload(snapshotPath, snapshot, { contentType: "image/jpeg", upsert: false }),
       ]);
-      if (targetUpload.error || snapshotUpload.error) throw targetUpload.error || snapshotUpload.error;
+      const uploadError = uploads.find((upload) => upload.error)?.error;
+      if (uploadError) throw uploadError;
       const { data: publicTarget } = supabase.storage.from("ar-maps").getPublicUrl(targetPath);
       const { data: publicSnapshot } = supabase.storage.from("ar-maps").getPublicUrl(snapshotPath);
       if (makeActive) {
@@ -218,6 +262,12 @@ export function AdminPlace({ venueId, userId, maps, placements, loadError }: { v
       nextPlacement.position.snapshotUrl = publicSnapshot.publicUrl;
       nextPlacement.position.heading = compass?.isAbsolute ? Math.round(compass.heading) : null;
       nextPlacement.position.headingAccuracy = compass?.isAbsolute ? compass.accuracy : null;
+      nextPlacement.position.anchors = capturedAnchors.map((captured) => {
+        const anchor = anchorPlacements.get(captured.name)!;
+        const path = anchorPaths.get(captured.name)!;
+        const { data } = supabase.storage.from("ar-maps").getPublicUrl(path);
+        return { ...anchor, imageUrl: data.publicUrl, quality: captured.quality };
+      });
       const { error: placementError } = await supabase.from("placements").insert({ venue_id: venueId, venue_map_id: mapId, name: name.trim(), status: makeActive ? "active" : "draft", target_index: 0, position: nextPlacement.position, rotation: nextPlacement.rotation, scale: nextPlacement.scale, created_by: userId, activated_at: makeActive ? new Date().toISOString() : null });
       if (placementError) throw placementError;
       setSaved(true);

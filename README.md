@@ -39,7 +39,9 @@ where p.id = u.id
 
 ## Markerless spatial setup
 
-In **Admin → Place Craig**, first fill the camera with an existing, permanent, detailed flat area such as a menu, mural, or decorated wall. The browser captures that view as an invisible relocalization landmark. It then displays real SLAM map points; tap one to place Craig on the corresponding 3D plane, adjust his rotation and height, and complete the guided left/stop/right scan. Craig remains at the selected world position while the admin moves the camera.
+In **Admin → Place Craig**, first fill the camera with an existing, permanent, detailed flat area such as a menu, mural, or decorated wall. The browser captures that view as an invisible relocalization landmark. It then displays real SLAM map points; tap one to place Craig on the corresponding 3D plane, adjust his rotation and height, and complete the guided left/stop/right scan. During that unchanged sweep the app automatically records additional high-quality natural reference views and stores Craig's transform relative to each one. The player can relocalize from any saved reference, then SLAM keeps Craig at the selected world position while the camera moves.
+
+Placements created before multi-reference localization was added continue to use their original landmark. Create and activate a new placement to gain the more reliable multi-reference behavior.
 
 Players scan the same ordinary store area. Craig is rendered only after 8th Wall reports normal SLAM tracking and the landmark pose remains stable across a sustained series of frames. If either the landmark or world tracking is lost, Craig is hidden immediately instead of being shown at an uncertain position. The player is never shown the landmark image, an artificial marker, or a placement puck.
 

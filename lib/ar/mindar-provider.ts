@@ -12,9 +12,19 @@ export type ImagePlacement = {
     headingAccuracy?: number | null;
     scanSpan?: number;
     snapshotUrl?: string;
+    anchors?: SpatialAnchor[];
   };
   rotation: { x: number; y: number; z: number; w: number };
   scale: number;
+};
+
+export type SpatialAnchor = {
+  name: string;
+  imageUrl: string;
+  position: { x: number; y: number; z: number };
+  rotation: { x: number; y: number; z: number; w: number };
+  scale: number;
+  quality?: number;
 };
 
 type MindARAnchor = { group: THREE.Group; onTargetFound?: () => void; onTargetLost?: () => void };
