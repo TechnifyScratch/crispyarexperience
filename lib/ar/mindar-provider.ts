@@ -13,6 +13,12 @@ export type ImagePlacement = {
     scanSpan?: number;
     snapshotUrl?: string;
     anchors?: SpatialAnchor[];
+    visualMap?: {
+      version: number;
+      method: "multi-view";
+      anchorCount: number;
+      minimumAgreement: number;
+    };
     surface?: {
       kind: "horizontal";
       required: boolean;

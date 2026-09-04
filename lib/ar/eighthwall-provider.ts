@@ -26,6 +26,7 @@ type LocalizationCandidate = {
   previousScale: number;
   frames: number;
   startedAt: number;
+  lastSeenAt: number;
 };
 type PipelineModule = {
   name: string;
@@ -340,17 +341,22 @@ async function mount(options: {
   };
 
   const confirmCandidate = () => {
-    if (options.admin || localized || !targetVisible || !trackingNormal) return;
+    if (options.admin || localized || !trackingNormal) return;
+    const now = performance.now();
+    const strictVisualMap = (options.placement?.position.visualMap?.version ?? 0) >= 1;
+    for (const [name, candidate] of candidates) {
+      if (now - candidate.lastSeenAt > 10000) candidates.delete(name);
+    }
     const stable: LocalizationCandidate[] = [];
     let bestProgress = 0;
     for (const candidate of candidates.values()) {
-      if (!visibleTargets.has(candidate.name)) continue;
-      const elapsed = performance.now() - candidate.startedAt;
+      const elapsed = now - candidate.startedAt;
       const progress = Math.min(0.88, candidate.frames / 10, elapsed / 700);
       bestProgress = Math.max(bestProgress, progress);
-      if (candidate.frames >= 6 && elapsed >= 450) stable.push(candidate);
+      if (candidate.frames >= 6 && elapsed >= 450 && now - candidate.lastSeenAt <= 10000) stable.push(candidate);
     }
-    options.onLocalizationProgress?.(bestProgress);
+    const distinctProgress = strictVisualMap ? Math.min(0.88, stable.length * 0.44) : 0;
+    options.onLocalizationProgress?.(Math.max(bestProgress, distinctProgress));
 
     let best: LocalizationCandidate | null = null;
     if (stable.length >= 2) {
@@ -375,7 +381,7 @@ async function mount(options: {
         }
         if (best) break;
       }
-    } else if (stable.length === 1) {
+    } else if (!strictVisualMap && stable.length === 1) {
       const only = stable[0];
       const elapsed = performance.now() - only.startedAt;
       if (visibleTargets.size === 1 && only.frames >= 10 && elapsed >= 700) best = only;
@@ -422,6 +428,7 @@ async function mount(options: {
         previousScale: detail.scale,
         frames: 1,
         startedAt: performance.now(),
+        lastSeenAt: performance.now(),
       });
       return;
     }
@@ -440,6 +447,7 @@ async function mount(options: {
         previousScale: detail.scale,
         frames: 1,
         startedAt: performance.now(),
+        lastSeenAt: performance.now(),
       });
       return;
     }
@@ -447,6 +455,7 @@ async function mount(options: {
     candidate.previousPosition.copy(position);
     candidate.previousRotation.copy(rotation);
     candidate.previousScale = detail.scale;
+    candidate.lastSeenAt = performance.now();
     candidate.position.lerp(position, 0.18);
     candidate.rotation.slerp(rotation, 0.18);
     candidate.scale = THREE.MathUtils.lerp(candidate.scale, detail.scale, 0.18);
@@ -556,7 +565,7 @@ async function mount(options: {
       { event: "reality.imagelost", process: ({ detail }) => {
         visibleTargets.delete(detail.name);
         targetVisible = visibleTargets.size > 0;
-        if (!options.admin && !localized) {
+        if (!options.admin && !localized && !options.placement?.position.visualMap) {
           resetCandidate(detail.name);
         }
       } },

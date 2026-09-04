@@ -17,6 +17,14 @@ type CapturedAnchor = { name: string; blob: Blob; url: string; quality: number }
 type PositionOffset = { x: number; y: number; z: number };
 
 const SWEEP_ANGLE = Math.PI / 10;
+const NEAR_SWEEP_ANGLE = SWEEP_ANGLE / 2;
+const REQUIRED_SCAN_VIEWS = [
+  "crispy-landmark-0",
+  "crispy-landmark-left-near",
+  "crispy-landmark-left",
+  "crispy-landmark-right-near",
+  "crispy-landmark-right",
+] as const;
 
 function angleDifference(from: number, to: number) {
   return Math.atan2(Math.sin(to - from), Math.cos(to - from));
@@ -89,6 +97,7 @@ export function AdminPlace({ venueId, userId, maps, placements, loadError }: { v
   const [reading, setReading] = useState<CompassReading | null>(null);
   const [orientationAllowed, setOrientationAllowed] = useState<boolean | null>(null);
   const [surfacePoints, setSurfacePoints] = useState(0);
+  const [scanViews, setScanViews] = useState(0);
   const [rotation, setRotation] = useState(0);
   const [scale, setScale] = useState(30);
   const [positionOffset, setPositionOffset] = useState<PositionOffset>({ x: 0, y: 0, z: 0 });
@@ -139,6 +148,7 @@ export function AdminPlace({ venueId, userId, maps, placements, loadError }: { v
       if (captured.quality < 0.32) return false;
       const url = URL.createObjectURL(captured.blob);
       anchorBlobsRef.current.push({ name, blob: captured.blob, url, quality: captured.quality });
+      setScanViews(anchorBlobsRef.current.length);
       tracker.addTarget(name, url, 480, 640);
       return true;
     } finally {
@@ -151,12 +161,20 @@ export function AdminPlace({ venueId, userId, maps, placements, loadError }: { v
     if (position) cameraXRef.current = position.x;
     const delta = angleDifference(sweepOriginRef.current, yaw);
     const sideways = cameraXRef.current - sweepXOriginRef.current;
-    if (sweepRef.current === "left" && (delta > SWEEP_ANGLE || sideways < -0.18)) {
+    if (sweepRef.current === "left" &&
+      !anchorBlobsRef.current.some((anchor) => anchor.name === "crispy-landmark-left-near") &&
+      (delta > NEAR_SWEEP_ANGLE || sideways < -0.09)) {
+      void recordSweepAnchor("crispy-landmark-left-near");
+    } else if (sweepRef.current === "left" && (delta > SWEEP_ANGLE || sideways < -0.18)) {
       void recordSweepAnchor("crispy-landmark-left").then((captured) => {
         if (!captured || sweepRef.current !== "left") return;
         setSweep("pause");
         window.setTimeout(() => { if (sweepRef.current === "pause") setSweep("right"); }, 900);
       });
+    } else if (sweepRef.current === "right" &&
+      !anchorBlobsRef.current.some((anchor) => anchor.name === "crispy-landmark-right-near") &&
+      (delta < -NEAR_SWEEP_ANGLE || sideways > 0.09)) {
+      void recordSweepAnchor("crispy-landmark-right-near");
     } else if (sweepRef.current === "right" && (delta < -SWEEP_ANGLE || sideways > 0.18)) {
       void recordSweepAnchor("crispy-landmark-right").then((captured) => {
         if (captured && sweepRef.current === "right") setSweep("done");
@@ -202,6 +220,7 @@ export function AdminPlace({ venueId, userId, maps, placements, loadError }: { v
       targetBlobRef.current = blob;
       targetUrlRef.current = URL.createObjectURL(blob);
       anchorBlobsRef.current = [{ name: "crispy-landmark-0", blob, url: targetUrlRef.current, quality }];
+      setScanViews(1);
       centerHeadingRef.current = readingRef.current;
       setMode("localizing");
       tracker.setTarget(targetUrlRef.current, 480, 640);
@@ -252,7 +271,8 @@ export function AdminPlace({ venueId, userId, maps, placements, loadError }: { v
       }
       const anchorPlacements = new Map(tracker.getAnchorPlacements().map((anchor) => [anchor.name, anchor]));
       const capturedAnchors = anchorBlobsRef.current.filter((anchor) => anchorPlacements.has(anchor.name));
-      if (capturedAnchors.length < 3) throw new Error("All three reference views must lock before saving. Point back across the scanned area slowly, then save again.");
+      const missingViews = REQUIRED_SCAN_VIEWS.filter((view) => !capturedAnchors.some((anchor) => anchor.name === view));
+      if (missingViews.length > 0) throw new Error("The full visual map did not finish locking. Point back across the scanned area slowly, then save again.");
       if (!capturedAnchors.some((anchor) => anchor.name === "crispy-landmark-0")) {
         throw new Error("The main landmark lost its spatial pose. Point back at it briefly and save again.");
       }
@@ -290,6 +310,12 @@ export function AdminPlace({ venueId, userId, maps, placements, loadError }: { v
         const { data } = supabase.storage.from("ar-maps").getPublicUrl(path);
         return { ...anchor, imageUrl: data.publicUrl, quality: captured.quality };
       });
+      nextPlacement.position.visualMap = {
+        version: 1,
+        method: "multi-view",
+        anchorCount: capturedAnchors.length,
+        minimumAgreement: 2,
+      };
       const { error: placementError } = await supabase.from("placements").insert({ venue_id: venueId, venue_map_id: mapId, name: name.trim(), folder, status: makeActive ? "active" : "draft", target_index: 0, position: nextPlacement.position, rotation: nextPlacement.rotation, scale: nextPlacement.scale, created_by: userId, activated_at: makeActive ? new Date().toISOString() : null });
       if (placementError) throw placementError;
       setSaved(true);
@@ -319,7 +345,7 @@ export function AdminPlace({ venueId, userId, maps, placements, loadError }: { v
           {mode === "starting" && <div className="camera-message"><strong>Starting spatial tracking…</strong></div>}
           {mode !== "idle" && mode !== "starting" && <div className={`tracking-status ${sweep === "done" ? "locked" : "searching"}`}>{instruction}</div>}
           {mode === "landmark" && <><div className="landmark-frame"><span>ONE FLAT, PERMANENT SURFACE</span></div><button className="landmark-capture" onClick={captureLandmark}>Capture invisible landmark</button></>}
-          {mode === "placement" && <div className="surface-point-count"><Crosshair size={14} /> {surfacePoints} real map points</div>}
+          {mode === "placement" && <div className="surface-point-count"><Crosshair size={14} /> {surfacePoints} map points · {scanViews}/{REQUIRED_SCAN_VIEWS.length} views</div>}
           {mode !== "idle" && <div className="placement-state"><Compass size={15} /> {reading?.isAbsolute ? `${Math.round(reading.heading)}° ${cardinalDirection(reading.heading)}` : orientationAllowed === false ? "Direction unavailable" : "Finding direction…"}</div>}
           {mode !== "idle" && <a className="eighthwall-credit" href="https://www.8thwall.org/" target="_blank" rel="noreferrer">Powered by 8th Wall</a>}
         </section>
@@ -340,7 +366,7 @@ export function AdminPlace({ venueId, userId, maps, placements, loadError }: { v
               setSaved(false);
             }}>Reset offsets</button>
           </details>
-          <p className="placement-disclosure">Green dots are real SLAM map points. The outlined square sits in 3D perspective on the selected plane, and Craig’s feet remain locked to it.</p>
+          <p className="placement-disclosure">Green dots are real SLAM map points. The left/right pass quietly builds a five-view visual map. On player phones, at least two saved views must agree before Craig can appear.</p>
           <button className="admin-primary save-placement" disabled={saving || sweep !== "done"} onClick={savePlacement}>{saved ? <><Check size={18} /> Saved in Supabase</> : <><Save size={18} /> {saving ? "Saving…" : "Save hiding place"}</>}</button>
           <label className="placement-checkbox"><input type="checkbox" checked={makeActive} onChange={(event) => setMakeActive(event.target.checked)} /> Make this the active hiding place</label>
         </aside>
