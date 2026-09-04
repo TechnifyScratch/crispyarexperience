@@ -815,7 +815,7 @@ h1 { margin: 0; font-family: Georgia, 'Times New Roman', serif; font-size: clamp
 .legal-page {
   color: #fff;
   background: #000;
-  font-family: var(--player-display);
+  font-family: var(--player-sans);
 }
 .intro-page button, .intro-page a,
 .black-login button, .black-login input, .black-login a,
@@ -835,13 +835,13 @@ h1 { margin: 0; font-family: Georgia, 'Times New Roman', serif; font-size: clamp
   box-shadow: 0 18px 55px rgba(0,0,0,.38);
   backdrop-filter: blur(16px);
   -webkit-backdrop-filter: blur(16px);
-  font-family: var(--player-display);
+  font-family: var(--player-sans);
 }
-.ar-page .scan-prompt { padding: 10px 15px; font-size: 14px; font-weight: 400; letter-spacing: .01em; }
+.ar-page .scan-prompt { padding: 10px 15px; font-size: 13px; font-weight: 700; letter-spacing: .01em; }
 .ar-page .camera-message { padding: 24px; }
-.ar-page .camera-message strong { font: 400 25px/1.05 var(--player-display); letter-spacing: -.02em; }
+.ar-page .camera-message strong { font: 800 22px/1.1 var(--player-sans); letter-spacing: -.025em; }
 .ar-page .camera-message span,
-.ar-page .start-card span { color: rgba(255,255,255,.7); font: 400 14px/1.45 var(--player-display); }
+.ar-page .start-card span { color: rgba(255,255,255,.7); font: 400 14px/1.45 var(--player-sans); }
 .ar-page .camera-message button,
 .ar-page .start-card button {
   min-width: 138px;
@@ -850,35 +850,37 @@ h1 { margin: 0; font-family: Georgia, 'Times New Roman', serif; font-size: clamp
   border-radius: 8px;
   color: #000;
   background: #fff;
-  font: 600 15px var(--player-display);
+  font: 800 15px var(--player-sans);
 }
-.ar-page > .capture-button { font-family: var(--player-display); font-weight: 600; }
+.ar-page > .capture-button { font-family: var(--player-sans); font-weight: 800; }
 
 .capture-modal {
   color: #fff;
   background: #000;
-  font-family: var(--player-display);
+  font-family: var(--player-sans);
 }
 .capture-modal::after { background: linear-gradient(transparent, rgba(0,0,0,.96)); }
 .capture-close,
 .capture-proof { border-color: rgba(255,255,255,.28); background: rgba(0,0,0,.78); }
 .capture-proof { border-radius: 12px; }
-.capture-proof strong { font: 400 22px/1.05 var(--player-display); }
-.capture-proof span { color: rgba(255,255,255,.72); font: 400 14px/1.35 var(--player-display); }
+.capture-proof strong { font: 800 19px/1.1 var(--player-sans); }
+.capture-proof span { color: rgba(255,255,255,.72); font: 400 14px/1.4 var(--player-sans); }
 .share-button {
   border-radius: 9px;
   color: #000;
   background: #fff;
-  font: 600 17px var(--player-display);
+  font: 800 17px var(--player-sans);
 }
-.download-fallback { color: rgba(255,255,255,.78); font: 400 13px var(--player-display); }
+.download-fallback { color: rgba(255,255,255,.78); font: 600 13px var(--player-sans); }
 
-.guest-entry p { color: rgba(255,255,255,.7); font: 400 18px/1.35 var(--player-display); }
-.guest-entry button { border-radius: 8px; font: 600 16px var(--player-display); }
+.guest-entry p { color: rgba(255,255,255,.7); font: 500 15px/1.4 var(--player-sans); }
+.guest-entry button { border-radius: 8px; font: 800 16px var(--player-sans); }
 
 .closed-copy .eyebrow,
 .closed-copy > p:last-of-type,
-.closed-copy a { font-family: var(--player-display); font-weight: 400; }
+.closed-copy a { font-family: var(--player-sans); }
+.closed-copy .eyebrow { font-weight: 800; }
+.closed-copy a { font-weight: 700; }
 
 .legal-page { padding: max(34px, env(safe-area-inset-top)) 20px max(34px, env(safe-area-inset-bottom)); }
 .legal-page article {
@@ -894,8 +896,8 @@ h1 { margin: 0; font-family: Georgia, 'Times New Roman', serif; font-size: clamp
 .legal-page article > a { color: rgba(255,255,255,.7); font-size: 14px; }
 .legal-page .eyebrow { color: rgba(255,255,255,.5); }
 .legal-page h1 { color: #fff; font-family: var(--player-display); font-weight: 400; }
-.legal-page h2 { color: #fff; font: 400 26px/1.1 var(--player-display); }
-.legal-page p { color: rgba(255,255,255,.7); font: 400 16px/1.6 var(--player-display); }
+.legal-page h2 { color: #fff; font: 800 22px/1.15 var(--player-sans); }
+.legal-page p { color: rgba(255,255,255,.7); font: 400 15px/1.65 var(--player-sans); }
 
 /* Still bare-bones, but easier for staff to scan and use */
 .admin-shell { color: #202020; background: #f3f3f1; font: 14px Arial, Helvetica, sans-serif; }
