@@ -653,23 +653,33 @@ async function mount(options: {
       const pointer = new THREE.Vector2(((clientX - rect.left) / rect.width) * 2 - 1, -(((clientY - rect.top) / rect.height) * 2 - 1));
       const ray = new THREE.Raycaster();
       ray.setFromCamera(pointer, camera);
-      const rayCandidates: { point: THREE.Vector3; miss: number }[] = [];
+      // Intersect the tap ray with complete fitted surfaces, rather than making
+      // the administrator hit a tiny individual SLAM point on the screen.
+      const heightBands = new Map<number, number[]>();
       for (const item of points) {
         if (item.confidence <= 0) continue;
-        const point = new THREE.Vector3(item.position.x, item.position.y, item.position.z);
-        const along = point.clone().sub(ray.ray.origin).dot(ray.ray.direction);
-        if (along < 0.15 || along > 8) continue;
-        const closest = ray.ray.origin.clone().addScaledVector(ray.ray.direction, along);
-        const miss = closest.distanceTo(point) / along;
-        if (miss < 0.06) rayCandidates.push({ point, miss });
+        const band = Math.round(item.position.y / 0.045);
+        heightBands.set(band, [...(heightBands.get(band) ?? []), item.position.y]);
       }
-      rayCandidates.sort((a, b) => a.miss - b.miss);
       let best: { point: THREE.Vector3; plane: HorizontalPlane; score: number } | null = null;
-      for (const candidate of rayCandidates.slice(0, 28)) {
-        const plane = horizontalPlaneNear(points, candidate.point, 0.34, 0.16);
-        if (!plane || plane.confidence < 0.64 || Math.abs(plane.y - candidate.point.y) > 0.1) continue;
-        const score = candidate.miss - plane.confidence * 0.018 + Math.abs(plane.y - candidate.point.y) * 0.08;
-        if (!best || score < best.score) best = { point: candidate.point, plane, score };
+      if (Math.abs(ray.ray.direction.y) > 0.018) {
+        for (const heights of heightBands.values()) {
+          if (heights.length < 8) continue;
+          const ordered = [...heights].sort((a, b) => a - b);
+          const approximateY = ordered[Math.floor(ordered.length / 2)];
+          const distance = (approximateY - ray.ray.origin.y) / ray.ray.direction.y;
+          if (distance < 0.15 || distance > 8) continue;
+          const approximateHit = ray.ray.at(distance, new THREE.Vector3());
+          const plane = horizontalPlaneNear(points, approximateHit, 0.5, 0.18);
+          if (!plane || plane.confidence < 0.64 || Math.abs(plane.y - approximateY) > 0.1) continue;
+          const exactDistance = (plane.y - ray.ray.origin.y) / ray.ray.direction.y;
+          if (exactDistance < 0.15 || exactDistance > 8) continue;
+          const exactHit = ray.ray.at(exactDistance, new THREE.Vector3());
+          const exactPlane = horizontalPlaneNear(points, exactHit, 0.42, 0.13);
+          if (!exactPlane || exactPlane.confidence < 0.64) continue;
+          const score = exactDistance - exactPlane.confidence * 0.08;
+          if (!best || score < best.score) best = { point: exactHit, plane: exactPlane, score };
+        }
       }
       if (!best) return false;
       selectedWorld = best.point.clone();
