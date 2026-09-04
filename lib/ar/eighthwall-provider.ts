@@ -81,6 +81,7 @@ type TargetDefinition = {
   imageUrl: string;
   width: number;
   height: number;
+  quality?: number;
   placement?: ImagePlacement;
 };
 
@@ -249,6 +250,7 @@ async function mount(options: {
   let transformControls: TransformControls | null = null;
   let transformHelper: THREE.Object3D | null = null;
   let lastTransformInteraction = 0;
+  let runtimeReadyEmitted = false;
   const relativeMatrix = new THREE.Matrix4();
 
   craig.visible = false;
@@ -381,10 +383,23 @@ async function mount(options: {
         }
         if (best) break;
       }
-    } else if (!strictVisualMap && stable.length === 1) {
-      const only = stable[0];
+    }
+    if (!best && stable.length > 0) {
+      const only = stable
+        .filter((candidate) => visibleTargets.has(candidate.name))
+        .sort((a, b) => b.frames - a.frames)[0];
+      if (!only) return;
       const elapsed = performance.now() - only.startedAt;
-      if (visibleTargets.size === 1 && only.frames >= 10 && elapsed >= 700) best = only;
+      const definition = targetDefinitions.find((target) => target.name === only.name);
+      const legacyReady = !strictVisualMap && visibleTargets.size === 1 && only.frames >= 10 && elapsed >= 700;
+      // A dense visual map should normally resolve from agreement between two
+      // viewpoints. Some mobile image trackers expose just one target at a
+      // time, so accept one only after a longer uninterrupted, high-quality
+      // pose lock. Surface validation still runs before Craig is revealed.
+      const verifiedSingleView = strictVisualMap && visibleTargets.has(only.name) &&
+        (definition?.quality ?? 0) >= 0.32 && only.frames >= 16 && elapsed >= 1000 &&
+        now - only.lastSeenAt < 180;
+      if (legacyReady || verifiedSingleView) best = only;
     }
 
     if (best) {
@@ -514,7 +529,7 @@ async function mount(options: {
             // Some iOS cameras expose a fixed AR-compatible format.
           }
         }
-        window.setTimeout(() => options.onReady?.(), 700);
+        if (options.admin) window.setTimeout(() => options.onReady?.(), 700);
       };
       void improveCamera();
     },
@@ -539,6 +554,10 @@ async function mount(options: {
           options.onTrackingLost?.();
         }
         trackingNormal = nextNormal;
+        if (trackingNormal && !runtimeReadyEmitted) {
+          runtimeReadyEmitted = true;
+          options.onReady?.();
+        }
         confirmCandidate();
       }
       const pointTime = performance.now();
@@ -761,6 +780,7 @@ export function mountEighthWallHunt(options: {
       imageUrl: anchor.imageUrl,
       width: 480,
       height: 640,
+      quality: anchor.quality,
       placement: { position: anchor.position, rotation: anchor.rotation, scale: anchor.scale },
     }))
     : [{ name: "crispy-landmark-0", imageUrl: options.imageTargetSrc, width: 480, height: 640, placement: options.placement }];

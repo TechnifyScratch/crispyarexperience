@@ -5,7 +5,7 @@ import { Camera, Check, Download, LoaderCircle, Share2, X } from "lucide-react";
 import type { ImagePlacement } from "@/lib/ar/mindar-provider";
 import { createBrowserSupabase } from "@/lib/supabase/browser";
 
-type CameraState = "idle" | "starting" | "ready" | "denied" | "unavailable";
+type CameraState = "idle" | "starting" | "calibrating" | "ready" | "denied" | "unavailable";
 type ArHuntProps = {
   tracking?: { imageTargetSrc: string; targetIndex: number; placement: ImagePlacement; provider?: string };
   prizeMessage?: string;
@@ -39,7 +39,7 @@ export function ArHunt({ tracking, prizeMessage = "Show this screen when you ord
   const [sharing, setSharing] = useState(false);
 
   const startCamera = useCallback(async () => {
-    if (cameraState === "starting" || cameraState === "ready") return;
+    if (cameraState === "starting" || cameraState === "calibrating" || cameraState === "ready") return;
     setCameraState("starting");
     if (!navigator.mediaDevices?.getUserMedia) { setCameraState("unavailable"); return; }
     try {
@@ -47,10 +47,12 @@ export function ArHunt({ tracking, prizeMessage = "Show this screen when you ord
         if (tracking.provider === "8thwall") {
           const canvas = overlayRef.current;
           if (!canvas) throw new Error("Spatial canvas is unavailable.");
+          let spatialReady = false;
           const { mountEighthWallHunt } = await import("@/lib/ar/eighthwall-provider");
           const mounted = await mountEighthWallHunt({
             canvas,
             ...tracking,
+            onReady: () => { spatialReady = true; setCameraState("ready"); },
             onLocalized: () => { setLocalizationProgress(1); setTargetVisible(true); },
             onTrackingLost: () => { setLocalizationProgress(0); setTargetVisible(false); },
             onLocalizationProgress: setLocalizationProgress,
@@ -59,7 +61,7 @@ export function ArHunt({ tracking, prizeMessage = "Show this screen when you ord
           captureVideoRef.current = mounted.video;
           captureCanvasRef.current = mounted.canvas;
           rendererCleanupRef.current = mounted.cleanup;
-          setCameraState("ready");
+          setCameraState(spatialReady ? "ready" : "calibrating");
           return;
         }
         const { mountMindArHunt } = await import("@/lib/ar/mindar-provider");
@@ -185,6 +187,7 @@ export function ArHunt({ tracking, prizeMessage = "Show this screen when you ord
         {(cameraState === "denied" || cameraState === "unavailable") && <div className="camera-message error-card"><Camera size={30} /><strong>Camera access is needed</strong><span>Allow camera access in your browser settings, then try again.</span><button onClick={startCamera}>Try again</button></div>}
       </div>
       <button className="capture-button" disabled={cameraState !== "ready"} onClick={takeCapture}><Camera size={34} /> Capture</button>
+      {cameraState === "calibrating" && <div className="spatial-preflight"><LoaderCircle className="spin" size={30} /><strong>Preparing the hunt…</strong><span>Checking camera and spatial tracking.</span></div>}
       {capturedUrl && (
         <div className="capture-modal" role="dialog" aria-modal="true" aria-label="Your capture">
           {/* eslint-disable-next-line @next/next/no-img-element */}

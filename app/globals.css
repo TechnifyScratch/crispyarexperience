@@ -839,6 +839,9 @@ h1 { margin: 0; font-family: Georgia, 'Times New Roman', serif; font-size: clamp
 }
 .ar-page .scan-prompt { padding: 10px 15px; font-size: 13px; font-weight: 700; letter-spacing: .01em; }
 .ar-page .camera-message { padding: 24px; }
+.ar-page .spatial-preflight { position: absolute; z-index: 15; inset: 0; display: grid; place-content: center; justify-items: center; gap: 13px; color: #fff; background: #000; text-align: center; }
+.ar-page .spatial-preflight strong { font: 800 22px/1.1 var(--player-sans); letter-spacing: -.025em; }
+.ar-page .spatial-preflight span { color: rgba(255,255,255,.62); font: 400 13px/1.4 var(--player-sans); }
 .ar-page .camera-message strong { font: 800 22px/1.1 var(--player-sans); letter-spacing: -.025em; }
 .ar-page .camera-message span,
 .ar-page .start-card span { color: rgba(255,255,255,.7); font: 400 14px/1.45 var(--player-sans); }
