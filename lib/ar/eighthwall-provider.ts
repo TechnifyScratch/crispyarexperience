@@ -2,6 +2,7 @@ import * as THREE from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { TransformControls } from "three/examples/jsm/controls/TransformControls.js";
 import type { ImagePlacement, SpatialAnchor } from "@/lib/ar/mindar-provider";
+import type { LocalizationDiagnostics } from "@/lib/ar/diagnostics";
 
 type Vec3 = { x: number; y: number; z: number };
 type Quat = { x: number; y: number; z: number; w: number };
@@ -214,10 +215,12 @@ async function mount(options: {
   onLocalized?: () => void;
   onTrackingLost?: () => void;
   onLocalizationProgress?: (progress: number) => void;
+  onDiagnostics?: (diagnostics: LocalizationDiagnostics) => void;
   onPose?: (yaw: number, position?: Vec3) => void;
   onSurfacePoints?: (count: number) => void;
   onPositionOffset?: (offset: Vec3) => void;
 }): Promise<EighthWallMount | EighthWallAdminMount> {
+  const diagnosticsStarted = performance.now();
   const [XR8, craig] = await Promise.all([loadRuntime(), createCraig()]);
   const canvas = options.canvas;
   let video: HTMLVideoElement | null = null;
@@ -251,6 +254,17 @@ async function mount(options: {
   let transformHelper: THREE.Object3D | null = null;
   let lastTransformInteraction = 0;
   let runtimeReadyEmitted = false;
+  let firstReferenceMs: number | null = null;
+  let localizedMs: number | null = null;
+  let poseResets = 0;
+  let surfaceResets = 0;
+  let lastReset: string | null = null;
+  let pairErrorM: number | null = null;
+  let surfaceConfidence: number | null = null;
+  let surfaceErrorM: number | null = null;
+  let diagnosticReason = "Waiting for normal world tracking.";
+  let diagnosticFrames = 0;
+  let diagnosticLastFrame = performance.now();
   const relativeMatrix = new THREE.Matrix4();
 
   craig.visible = false;
@@ -278,6 +292,8 @@ async function mount(options: {
     anchoredPosition = worldPosition.clone();
     supportCandidateY = null;
     supportCandidateFrames = 0;
+    surfaceConfidence = null;
+    surfaceErrorM = null;
     placementFinalized = false;
     surfaceRequired = options.placement?.position.surface?.required === true;
     surfaceDecisionDeadline = performance.now() + (surfaceRequired ? 4500 : 500);
@@ -285,6 +301,7 @@ async function mount(options: {
     // model must never slide between changing point-cloud estimates.
     craig.visible = false;
     localized = true;
+    diagnosticReason = surfaceRequired ? "Reference matched; checking the saved support surface." : "Reference matched.";
     options.onLocalizationProgress?.(0.9);
   };
 
@@ -294,6 +311,8 @@ async function mount(options: {
     placementFinalized = true;
     surfaceDecisionDeadline = 0;
     craig.visible = true;
+    localizedMs ??= performance.now() - diagnosticsStarted;
+    diagnosticReason = "Craig is locked to the saved position.";
     options.onLocalizationProgress?.(1);
     options.onLocalized?.();
   };
@@ -309,10 +328,16 @@ async function mount(options: {
     expectedSupport.y -= surface?.offsetM ?? 0;
     const support = horizontalPlaneNear(points, expectedSupport, 0.44, 0.18);
     const tolerance = surface?.toleranceM ?? 0.1;
+    surfaceConfidence = support?.confidence ?? null;
+    surfaceErrorM = support ? Math.abs(support.y - expectedSupport.y) : null;
     if (!support || support.confidence < 0.62 || Math.abs(support.y - expectedSupport.y) > tolerance) {
+      diagnosticReason = !support ? "No support plane near the saved position." : support.confidence < 0.62 ? "Support plane has too few reliable features." : "Support plane disagrees with the saved height.";
       supportCandidateY = null;
       supportCandidateFrames = 0;
       if (performance.now() >= surfaceDecisionDeadline) {
+        surfaceResets += 1;
+        lastReset = diagnosticReason;
+        diagnosticReason = "Surface check timed out; searching for a reference again.";
         craig.visible = false;
         localized = false;
         anchoredPosition = null;
@@ -331,6 +356,7 @@ async function mount(options: {
     }
     supportCandidateY = THREE.MathUtils.lerp(supportCandidateY, support.y, 0.2);
     supportCandidateFrames += 1;
+    diagnosticReason = `Support plane stable for ${supportCandidateFrames}/8 frames.`;
     // The plane is a validator, not a new placement. Preserve the exact saved
     // transform so live map noise can never move Craig after localization.
     if (supportCandidateFrames >= 8) finalizePlayerPlacement();
@@ -346,6 +372,7 @@ async function mount(options: {
     if (options.admin || localized || !trackingNormal) return;
     const now = performance.now();
     const strictVisualMap = (options.placement?.position.visualMap?.version ?? 0) >= 1;
+    pairErrorM = null;
     for (const [name, candidate] of candidates) {
       if (now - candidate.lastSeenAt > 10000) candidates.delete(name);
     }
@@ -359,6 +386,7 @@ async function mount(options: {
     }
     const distinctProgress = strictVisualMap ? Math.min(0.88, stable.length * 0.44) : 0;
     options.onLocalizationProgress?.(Math.max(bestProgress, distinctProgress));
+    diagnosticReason = candidates.size === 0 ? "No saved reference recognized in this view." : stable.length === 0 ? "Reference seen; waiting for a steady pose." : "Waiting for two agreeing views or a high-quality single-view lock.";
 
     let best: LocalizationCandidate | null = null;
     if (stable.length >= 2) {
@@ -376,6 +404,7 @@ async function mount(options: {
           aWorld.decompose(aPosition, aRotation, aScale);
           bWorld.decompose(bPosition, bRotation, bScale);
           const scaleDelta = Math.abs(aScale.x - bScale.x) / Math.max(Math.abs(aScale.x), 0.0001);
+          pairErrorM = Math.min(pairErrorM ?? Infinity, aPosition.distanceTo(bPosition));
           if (aPosition.distanceTo(bPosition) <= 0.1 && aRotation.angleTo(bRotation) <= THREE.MathUtils.degToRad(12) && scaleDelta <= 0.14) {
             best = a.frames >= b.frames ? a : b;
             break;
@@ -410,6 +439,7 @@ async function mount(options: {
 
   const applyTarget = (detail: ImageEvent) => {
     if (!targetDefinitions.some((target) => target.name === detail.name)) return;
+    firstReferenceMs ??= performance.now() - diagnosticsStarted;
     visibleTargets.add(detail.name);
     targetVisible = true;
     if (options.admin) {
@@ -452,6 +482,9 @@ async function mount(options: {
     const rotationDelta = candidate.previousRotation.angleTo(rotation);
     const scaleDelta = Math.abs(detail.scale - candidate.previousScale) / Math.max(candidate.previousScale, 0.0001);
     if (positionDelta > 0.07 || rotationDelta > THREE.MathUtils.degToRad(6) || scaleDelta > 0.12) {
+      poseResets += 1;
+      lastReset = `Pose moved ${(positionDelta * 100).toFixed(1)} cm, rotated ${THREE.MathUtils.radToDeg(rotationDelta).toFixed(1)}°, scale changed ${Math.round(scaleDelta * 100)}%.`;
+      diagnosticReason = "Reference pose jumped; stability count restarted.";
       candidates.set(detail.name, {
         name: detail.name,
         position,
@@ -545,6 +578,8 @@ async function mount(options: {
           anchoredPosition = null;
           supportCandidateY = null;
           supportCandidateFrames = 0;
+          surfaceConfidence = null;
+          surfaceErrorM = null;
           placementFinalized = false;
           surfaceDecisionDeadline = 0;
           pointHistory.clear();
@@ -565,6 +600,38 @@ async function mount(options: {
       for (const [id, stored] of pointHistory) if (pointTime - stored.seenAt > 1800) pointHistory.delete(id);
       points = [...pointHistory.values()].map((stored) => stored.point);
       settleCraigOnSurface();
+      if (options.onDiagnostics) {
+        diagnosticFrames += 1;
+        const now = performance.now();
+        if (now - diagnosticLastFrame >= 200) {
+          const project = (position: THREE.Vector3) => {
+            if (!camera) return null;
+            const projected = position.clone().project(camera);
+            if (![projected.x, projected.y, projected.z].every(Number.isFinite) || projected.z < -1 || projected.z > 1 || Math.abs(projected.x) > 1 || Math.abs(projected.y) > 1) return null;
+            return { x: (projected.x + 1) / 2, y: (1 - projected.y) / 2 };
+          };
+          const best = [...candidates.values()].sort((a, b) => b.frames - a.frames)[0];
+          const candidatePlacement = best ? placementByTarget.get(best.name) ?? options.placement : null;
+          const candidatePosition = best && candidatePlacement ? new THREE.Vector3().setFromMatrixPosition(composeCandidateWorld(best, candidatePlacement)) : null;
+          const craigPoint = trackingNormal ? project(anchoredPosition ?? candidatePosition ?? new THREE.Vector3(NaN, NaN, NaN)) : null;
+          const stage = !trackingNormal ? "tracking" : placementFinalized ? "localized" : localized ? "surface" : candidates.size === 0 ? "searching" : best?.frames >= 6 ? "agreement" : "stabilizing";
+          options.onDiagnostics({
+            elapsedMs: now - diagnosticsStarted, firstReferenceMs, localizedMs,
+            fps: diagnosticFrames * 1000 / (now - diagnosticLastFrame),
+            tracking: reality.trackingStatus ?? "UNKNOWN", trackingReason: reality.trackingReason ?? "", stage,
+            reason: trackingNormal ? diagnosticReason : "World tracking is not ready; scan textured, well-lit surroundings.",
+            referenceCount: targetDefinitions.length,
+            references: targetDefinitions.map((target) => ({ name: target.name, visible: visibleTargets.has(target.name), frames: candidates.get(target.name)?.frames ?? 0, ageMs: now - (candidates.get(target.name)?.lastSeenAt ?? diagnosticsStarted), quality: target.quality ?? null })),
+            poseResets, surfaceResets, lastReset, pairErrorM, worldPoints: points.length,
+            surface: { required: options.placement?.position.surface?.required === true, confidence: surfaceConfidence, errorM: surfaceErrorM, frames: supportCandidateFrames, remainingMs: Math.max(0, surfaceDecisionDeadline - now) },
+            frame: { width: canvas.width, height: canvas.height },
+            points: points.filter((point) => point.confidence > 0).slice(0, 90).flatMap((point) => { const p = project(new THREE.Vector3(point.position.x, point.position.y, point.position.z)); return p ? [p] : []; }),
+            craig: craigPoint ? { ...craigPoint, confirmed: placementFinalized } : null,
+          });
+          diagnosticFrames = 0;
+          diagnosticLastFrame = now;
+        }
+      }
       const poseYaw = cameraYaw(reality.rotation);
       if (poseYaw != null) options.onPose?.(poseYaw, reality.position);
       options.onSurfacePoints?.(points.length);
@@ -604,19 +671,6 @@ async function mount(options: {
     imageTargetData: targetData(targetDefinitions),
   });
   const modules = [XR8.GlTextureRenderer.pipelineModule(), XR8.Threejs.pipelineModule(), XR8.XrController.pipelineModule(), sceneModule];
-  XR8.addCameraPipelineModules(modules);
-  XR8.run({ canvas, allowedDevices: XR8.XrConfig.device().MOBILE, glContextConfig: { alpha: false, antialias: true, preserveDrawingBuffer: true } });
-
-  await new Promise<void>((resolve, reject) => {
-    const started = performance.now();
-    const check = () => {
-      if (video?.videoWidth) return resolve();
-      if (performance.now() - started > 15000) return reject(new Error("The spatial camera did not start."));
-      requestAnimationFrame(check);
-    };
-    check();
-  });
-
   const cleanup = () => {
     transformControls?.detach();
     transformControls?.dispose();
@@ -631,6 +685,24 @@ async function mount(options: {
       else material.dispose();
     });
   };
+  try {
+    XR8.addCameraPipelineModules(modules);
+    XR8.run({ canvas, allowedDevices: XR8.XrConfig.device().MOBILE, glContextConfig: { alpha: false, antialias: true, preserveDrawingBuffer: true } });
+
+    await new Promise<void>((resolve, reject) => {
+      const started = performance.now();
+      const check = () => {
+        if (video?.videoWidth) return resolve();
+        if (performance.now() - started > 15000) return reject(new Error("The spatial camera did not start."));
+        requestAnimationFrame(check);
+      };
+      check();
+    });
+  } catch (error) {
+    cleanup();
+    throw error;
+  }
+
   const capture = () => canvas.toDataURL("image/jpeg", 0.9);
   const base = { canvas, get video() { return video!; }, cleanup, capture };
   if (!options.admin) return base;
@@ -772,6 +844,7 @@ export function mountEighthWallHunt(options: {
   onLocalized: () => void;
   onTrackingLost?: () => void;
   onLocalizationProgress?: (progress: number) => void;
+  onDiagnostics?: (diagnostics: LocalizationDiagnostics) => void;
 }) {
   const savedAnchors = options.placement.position.anchors ?? [];
   const targets: TargetDefinition[] = savedAnchors.length > 0
@@ -784,7 +857,7 @@ export function mountEighthWallHunt(options: {
       placement: { position: anchor.position, rotation: anchor.rotation, scale: anchor.scale },
     }))
     : [{ name: "crispy-landmark-0", imageUrl: options.imageTargetSrc, width: 480, height: 640, placement: options.placement }];
-  return mount({ canvas: options.canvas, targets, placement: options.placement, admin: false, onReady: options.onReady, onLocalized: options.onLocalized, onTrackingLost: options.onTrackingLost, onLocalizationProgress: options.onLocalizationProgress }) as Promise<EighthWallMount>;
+  return mount({ canvas: options.canvas, targets, placement: options.placement, admin: false, onReady: options.onReady, onLocalized: options.onLocalized, onTrackingLost: options.onTrackingLost, onLocalizationProgress: options.onLocalizationProgress, onDiagnostics: options.onDiagnostics }) as Promise<EighthWallMount>;
 }
 
 export function mountEighthWallAdmin(options: {

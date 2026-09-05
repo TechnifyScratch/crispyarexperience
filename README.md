@@ -58,3 +58,20 @@ The 8th Wall framework is open source, while its distributed SLAM engine is prov
 ## Vercel
 
 Import the GitHub repository into Vercel and add the values from `.env.example` in Project Settings → Environment Variables. Vercel provides the HTTPS required for camera access.
+
+## Admin dev vision
+
+Sign in as staff with an **admin** role, then open `/play` during an active hunt (or use **Test with dev vision** in the admin sidebar). The server verifies the signed-in user's profile before starting play. Only verified admins receive **DEV VISION**; URL parameters, browser storage, anonymous guests, and an unconfigured local preview cannot enable it. The existing event schedule and active-placement rules still apply.
+
+Dev vision starts enabled for admins. The camera overlay provides:
+
+- Green boxes with object category, confidence, and short-lived tracking ID. A small COCO-SSD model recognizes 80 common categories, including cups, bottles, vases, and potted plants. It does not recognize every item or identify a particular mug across separate visits.
+- **Details → Label an item** freezes the view so staff can draw a rectangle and name an arbitrary textured item, such as a package. Blue boxes follow that patch's appearance during this session. Relabel after tracking is lost or the viewpoint/appearance changes substantially; this is not persistent object recognition.
+- Green SLAM feature dots, an amber candidate Craig marker, and a green marker after his position passes localization. “Near Craig in view” means image-space proximity to his confirmed projection; it is not a physical distance estimate.
+- World-tracking status and frame rate, first-reference/first-lock timings, reference quality and stability counts, pose resets, reference disagreement, support-plane confidence and height error, and surface-check timeouts. **Save report** downloads these measurements and the recent stage log as JSON, without camera images.
+
+Object labels provide diagnostic context; they do not establish Craig's world position or weaken the existing landmark/surface validation. A relocated cup therefore cannot relocate Craig. This release makes recognition delays observable; faster and more robust in-store localization must be measured on actual phones before tuning those checks.
+
+Inference runs in a dedicated, single-threaded WASM worker, using a reduced camera frame and at most one scan in flight. It pauses when the page is hidden or an item is being labelled. Frames stay on the device; only model weights are downloaded from TensorFlow's model host. `npm install` copies the WASM runtime to `public/vendor/vision`. Guests load neither the diagnostic component nor the detector/model. Turning **DEV VISION OFF** terminates its worker; turning it back on reloads it. Old detection boxes are hidden once the source frame is more than one second old. Diagnostic graphics are excluded from customer captures.
+
+Run `npm run test:vision` for role-gating, tracking, coordinate alignment, manual-patch, and spatial-diagnostic regression checks. Also run `npm run lint` and `npm run build`. Validate recognition quality, latency, battery use, and moving objects on iPhone/Android hardware at the restaurant; desktop worker timings do not predict phone performance.

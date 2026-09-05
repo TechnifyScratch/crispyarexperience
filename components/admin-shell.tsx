@@ -30,7 +30,7 @@ export function AdminShell({ children, previewMode }: { children: React.ReactNod
       <aside className="admin-sidebar">
         <div className="admin-logo">Crispy Craig <span>Admin</span></div>
         <nav>{links.map(({ href, label, icon: Icon }) => <Link className={pathname === href ? "active" : ""} href={href} key={href}><Icon size={16} /> <span>{label}</span></Link>)}</nav>
-        <div className="admin-account-actions"><Link className="admin-exit" href="/">← Player site</Link><AdminLogout /></div>
+        <div className="admin-account-actions"><Link className="admin-exit" href="/play">Test with dev vision</Link><Link className="admin-exit" href="/">← Player site</Link><AdminLogout /></div>
       </aside>
       <div className="admin-main">
         <header className="admin-mobile-header"><strong>Crispy Craig Admin</strong><AdminLogout /></header>

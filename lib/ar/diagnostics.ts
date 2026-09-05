@@ -1,0 +1,22 @@
+export type ScreenPoint = { x: number; y: number };
+export type LocalizationDiagnostics = {
+  elapsedMs: number;
+  firstReferenceMs: number | null;
+  localizedMs: number | null;
+  fps: number;
+  tracking: string;
+  trackingReason: string;
+  stage: "tracking" | "searching" | "stabilizing" | "agreement" | "surface" | "localized";
+  reason: string;
+  referenceCount: number;
+  references: { name: string; visible: boolean; frames: number; ageMs: number; quality: number | null }[];
+  poseResets: number;
+  surfaceResets: number;
+  lastReset: string | null;
+  pairErrorM: number | null;
+  worldPoints: number;
+  surface: { required: boolean; confidence: number | null; errorM: number | null; frames: number; remainingMs: number };
+  frame: { width: number; height: number };
+  points: ScreenPoint[];
+  craig: (ScreenPoint & { confirmed: boolean }) | null;
+};

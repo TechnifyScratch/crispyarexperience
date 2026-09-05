@@ -7,3 +7,4 @@ out
 *.log
 .DS_Store
 public/vendor/8thwall
+public/vendor/vision

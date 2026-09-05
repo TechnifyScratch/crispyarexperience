@@ -3,16 +3,22 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "postinstall": "node scripts/copy-8thwall.mjs",
+    "postinstall": "node scripts/copy-8thwall.mjs && node scripts/copy-vision.mjs",
     "dev": "next dev",
     "build": "next build --webpack",
     "start": "next start",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "test:vision": "node --test scripts/test-vision.mjs"
   },
   "dependencies": {
     "@8thwall/engine-binary": "^1.0.0",
     "@supabase/ssr": "0.12.5",
     "@supabase/supabase-js": "2.112.4",
+    "@tensorflow-models/coco-ssd": "^2.2.3",
+    "@tensorflow/tfjs-backend-cpu": "^4.22.0",
+    "@tensorflow/tfjs-backend-wasm": "^4.22.0",
+    "@tensorflow/tfjs-converter": "^4.22.0",
+    "@tensorflow/tfjs-core": "^4.22.0",
     "clsx": "2.1.1",
     "lucide-react": "1.38.0",
     "next": "16.3.4",

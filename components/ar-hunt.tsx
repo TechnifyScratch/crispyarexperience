@@ -2,16 +2,21 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Camera, Check, Download, LoaderCircle, Share2, X } from "lucide-react";
+import dynamic from "next/dynamic";
+import type { LocalizationDiagnostics } from "@/lib/ar/diagnostics";
 import type { ImagePlacement } from "@/lib/ar/mindar-provider";
 import { createBrowserSupabase } from "@/lib/supabase/browser";
 
-type CameraState = "idle" | "starting" | "calibrating" | "ready" | "denied" | "unavailable";
+const VisionDebug = dynamic(() => import("@/components/vision-debug"), { ssr: false });
+
+type CameraState = "idle" | "starting" | "calibrating" | "ready" | "denied" | "unavailable" | "failed";
 type ArHuntProps = {
   tracking?: { imageTargetSrc: string; targetIndex: number; placement: ImagePlacement; provider?: string };
   prizeMessage?: string;
   watermark?: boolean;
   venueId?: string;
   placementId?: string;
+  adminDiagnostics?: boolean;
 };
 
 function formatElapsed(totalSeconds: number) {
@@ -21,7 +26,7 @@ function formatElapsed(totalSeconds: number) {
   return `${hours}:${minutes}:${seconds}`;
 }
 
-export function ArHunt({ tracking, prizeMessage = "Show this screen when you order.", watermark = true, venueId, placementId }: ArHuntProps) {
+export function ArHunt({ tracking, prizeMessage = "Show this screen when you order.", watermark = true, venueId, placementId, adminDiagnostics = false }: ArHuntProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const overlayRef = useRef<HTMLCanvasElement>(null);
@@ -31,12 +36,14 @@ export function ArHunt({ tracking, prizeMessage = "Show this screen when you ord
   const sessionRecordedRef = useRef(false);
   const combinedCanvasRef = useRef(false);
   const startedRef = useRef(false);
+  const diagnosticsRef = useRef<LocalizationDiagnostics | null>(null);
   const [cameraState, setCameraState] = useState<CameraState>("idle");
   const [targetVisible, setTargetVisible] = useState(false);
   const [localizationProgress, setLocalizationProgress] = useState(0);
   const [elapsed, setElapsed] = useState(0);
   const [capturedUrl, setCapturedUrl] = useState<string | null>(null);
   const [sharing, setSharing] = useState(false);
+  const getVisionSource = useCallback(() => combinedCanvasRef.current ? captureCanvasRef.current : captureVideoRef.current, []);
 
   const startCamera = useCallback(async () => {
     if (cameraState === "starting" || cameraState === "calibrating" || cameraState === "ready") return;
@@ -56,6 +63,7 @@ export function ArHunt({ tracking, prizeMessage = "Show this screen when you ord
             onLocalized: () => { setLocalizationProgress(1); setTargetVisible(true); },
             onTrackingLost: () => { setLocalizationProgress(0); setTargetVisible(false); },
             onLocalizationProgress: setLocalizationProgress,
+            onDiagnostics: adminDiagnostics ? (snapshot) => { diagnosticsRef.current = snapshot; } : undefined,
           });
           combinedCanvasRef.current = true;
           captureVideoRef.current = mounted.video;
@@ -75,14 +83,25 @@ export function ArHunt({ tracking, prizeMessage = "Show this screen when you ord
       const stream = await navigator.mediaDevices.getUserMedia({ audio: false, video: { facingMode: { ideal: "environment" }, width: { ideal: 1920 }, height: { ideal: 1080 } } });
       const video = videoRef.current;
       const canvas = overlayRef.current;
-      if (!video || !canvas) throw new Error("Camera view is unavailable.");
+      if (!video || !canvas) {
+        stream.getTracks().forEach((track) => track.stop());
+        throw new Error("Camera view is unavailable.");
+      }
       video.srcObject = stream;
-      await video.play();
+      try {
+        await video.play();
+      } catch (error) {
+        stream.getTracks().forEach((track) => track.stop());
+        video.srcObject = null;
+        throw error;
+      }
       captureVideoRef.current = video;
       captureCanvasRef.current = canvas;
       setCameraState("ready");
-    } catch { setCameraState("denied"); }
-  }, [cameraState, tracking]);
+    } catch (error) {
+      setCameraState(error instanceof DOMException && error.name === "NotAllowedError" ? "denied" : "failed");
+    }
+  }, [adminDiagnostics, cameraState, tracking]);
 
   useEffect(() => {
     if (startedRef.current) return;
@@ -184,10 +203,11 @@ export function ArHunt({ tracking, prizeMessage = "Show this screen when you ord
         {tracking && cameraState === "ready" && !targetVisible && <div className="scan-prompt">{localizationProgress > 0 ? `Recognizing the area… ${Math.round(localizationProgress * 100)}%` : "Look around slowly…"}</div>}
         {tracking?.provider === "8thwall" && <a className="eighthwall-credit" href="https://www.8thwall.org/" target="_blank" rel="noreferrer">Powered by 8th Wall</a>}
         {cameraState === "starting" && <div className="camera-message"><LoaderCircle className="spin" size={28} /><strong>Starting your camera…</strong></div>}
-        {(cameraState === "denied" || cameraState === "unavailable") && <div className="camera-message error-card"><Camera size={30} /><strong>Camera access is needed</strong><span>Allow camera access in your browser settings, then try again.</span><button onClick={startCamera}>Try again</button></div>}
+        {(cameraState === "denied" || cameraState === "unavailable" || cameraState === "failed") && <div className="camera-message error-card"><Camera size={30} /><strong>{cameraState === "failed" ? "The hunt couldn't start" : cameraState === "unavailable" ? "Camera is unavailable" : "Camera access is needed"}</strong><span>{cameraState === "failed" ? "Check your connection and try again. If the issue continues, reopen the hunt in your phone's browser." : cameraState === "unavailable" ? "Open the hunt in your phone's browser using the secure website link." : "Allow camera access in your browser settings, then try again."}</span><button onClick={startCamera}>Try again</button></div>}
+        {adminDiagnostics && <VisionDebug getSource={getVisionSource} diagnostics={diagnosticsRef} cameraState={cameraState} provider={tracking?.provider} />}
       </div>
       <button className="capture-button" disabled={cameraState !== "ready"} onClick={takeCapture}><Camera size={34} /> Capture</button>
-      {cameraState === "calibrating" && <div className="spatial-preflight"><LoaderCircle className="spin" size={30} /><strong>Preparing the hunt…</strong><span>Checking camera and spatial tracking.</span></div>}
+      {cameraState === "calibrating" && !adminDiagnostics && <div className="spatial-preflight"><LoaderCircle className="spin" size={30} /><strong>Preparing the hunt…</strong><span>Checking camera and spatial tracking.</span></div>}
       {capturedUrl && (
         <div className="capture-modal" role="dialog" aria-modal="true" aria-label="Your capture">
           {/* eslint-disable-next-line @next/next/no-img-element */}
