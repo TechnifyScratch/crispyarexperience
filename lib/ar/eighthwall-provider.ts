@@ -295,8 +295,11 @@ async function mount(options: {
     surfaceConfidence = null;
     surfaceErrorM = null;
     placementFinalized = false;
-    surfaceRequired = options.placement?.position.surface?.required === true;
-    surfaceDecisionDeadline = performance.now() + (surfaceRequired ? 4500 : 500);
+    // Player content is never allowed to resolve in mid-air. New placements
+    // include a measured support offset; older ones still have to find a real
+    // horizontal plane close to the saved anchor before they can render.
+    surfaceRequired = !options.admin || options.placement?.position.surface?.required === true;
+    surfaceDecisionDeadline = performance.now() + (surfaceRequired ? 3000 : 500);
     // Do not reveal Craig while surface detection is still deciding. A visible
     // model must never slide between changing point-cloud estimates.
     craig.visible = false;
@@ -312,7 +315,7 @@ async function mount(options: {
     surfaceDecisionDeadline = 0;
     craig.visible = true;
     localizedMs ??= performance.now() - diagnosticsStarted;
-    diagnosticReason = "Craig is locked to the saved position.";
+    diagnosticReason = supportY == null ? "Craig is locked to the saved position." : "Craig is grounded and locked to the verified support surface.";
     options.onLocalizationProgress?.(1);
     options.onLocalized?.();
   };
@@ -326,8 +329,11 @@ async function mount(options: {
     const surface = options.placement?.position.surface;
     const expectedSupport = anchoredPosition.clone();
     expectedSupport.y -= surface?.offsetM ?? 0;
-    const support = horizontalPlaneNear(points, expectedSupport, 0.44, 0.18);
-    const tolerance = surface?.toleranceM ?? 0.1;
+    // Score only local, flat, well-covered planes near the intended hiding
+    // point. The wider vertical window corrects image-anchor scale drift while
+    // remaining too small to jump from a counter down to the floor.
+    const support = horizontalPlaneNear(points, expectedSupport, 0.52, 0.26);
+    const tolerance = Math.max(surface?.toleranceM ?? 0.1, 0.22);
     surfaceConfidence = support?.confidence ?? null;
     surfaceErrorM = support ? Math.abs(support.y - expectedSupport.y) : null;
     if (!support || support.confidence < 0.62 || Math.abs(support.y - expectedSupport.y) > tolerance) {
@@ -356,10 +362,12 @@ async function mount(options: {
     }
     supportCandidateY = THREE.MathUtils.lerp(supportCandidateY, support.y, 0.2);
     supportCandidateFrames += 1;
-    diagnosticReason = `Support plane stable for ${supportCandidateFrames}/8 frames.`;
-    // The plane is a validator, not a new placement. Preserve the exact saved
-    // transform so live map noise can never move Craig after localization.
-    if (supportCandidateFrames >= 8) finalizePlayerPlacement();
+    diagnosticReason = `Support plane stable for ${supportCandidateFrames}/3 frames.`;
+    // Ground once, then freeze. This preserves the saved X/Z position and
+    // rotation while correcting only vertical localization drift.
+    if (supportCandidateFrames >= 3) {
+      finalizePlayerPlacement(supportCandidateY + (surface?.offsetM ?? 0));
+    }
   };
 
   const resetCandidate = (name?: string) => {
@@ -380,9 +388,9 @@ async function mount(options: {
     let bestProgress = 0;
     for (const candidate of candidates.values()) {
       const elapsed = now - candidate.startedAt;
-      const progress = Math.min(0.88, candidate.frames / 10, elapsed / 700);
+      const progress = Math.min(0.88, candidate.frames / 6, elapsed / 300);
       bestProgress = Math.max(bestProgress, progress);
-      if (candidate.frames >= 6 && elapsed >= 450 && now - candidate.lastSeenAt <= 10000) stable.push(candidate);
+      if (candidate.frames >= 4 && elapsed >= 160 && now - candidate.lastSeenAt <= 10000) stable.push(candidate);
     }
     const distinctProgress = strictVisualMap ? Math.min(0.88, stable.length * 0.44) : 0;
     options.onLocalizationProgress?.(Math.max(bestProgress, distinctProgress));
@@ -420,13 +428,13 @@ async function mount(options: {
       if (!only) return;
       const elapsed = performance.now() - only.startedAt;
       const definition = targetDefinitions.find((target) => target.name === only.name);
-      const legacyReady = !strictVisualMap && visibleTargets.size === 1 && only.frames >= 10 && elapsed >= 700;
+      const legacyReady = !strictVisualMap && visibleTargets.size === 1 && only.frames >= 6 && elapsed >= 250;
       // A dense visual map should normally resolve from agreement between two
       // viewpoints. Some mobile image trackers expose just one target at a
-      // time, so accept one only after a longer uninterrupted, high-quality
-      // pose lock. Surface validation still runs before Craig is revealed.
+      // time, so accept one after a brief uninterrupted, high-quality pose
+      // lock. Mandatory surface grounding still runs before Craig is revealed.
       const verifiedSingleView = strictVisualMap && visibleTargets.has(only.name) &&
-        (definition?.quality ?? 0) >= 0.32 && only.frames >= 16 && elapsed >= 1000 &&
+        (definition?.quality ?? 0) >= 0.32 && only.frames >= 6 && elapsed >= 250 &&
         now - only.lastSeenAt < 180;
       if (legacyReady || verifiedSingleView) best = only;
     }

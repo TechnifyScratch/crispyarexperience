@@ -202,12 +202,12 @@ export function ArHunt({ tracking, prizeMessage = "Show this screen when you ord
         <canvas ref={overlayRef} className={`ar-overlay ${tracking && tracking.provider !== "8thwall" ? "provider-placeholder" : ""}`} />
         {tracking && cameraState === "ready" && !targetVisible && <div className="scan-prompt">{localizationProgress > 0 ? `Recognizing the area… ${Math.round(localizationProgress * 100)}%` : "Look around slowly…"}</div>}
         {tracking?.provider === "8thwall" && <a className="eighthwall-credit" href="https://www.8thwall.org/" target="_blank" rel="noreferrer">Powered by 8th Wall</a>}
-        {cameraState === "starting" && <div className="camera-message"><LoaderCircle className="spin" size={28} /><strong>Starting your camera…</strong></div>}
+        {cameraState === "starting" && tracking?.provider !== "8thwall" && <div className="camera-message"><LoaderCircle className="spin" size={28} /><strong>Starting your camera…</strong></div>}
         {(cameraState === "denied" || cameraState === "unavailable" || cameraState === "failed") && <div className="camera-message error-card"><Camera size={30} /><strong>{cameraState === "failed" ? "The hunt couldn't start" : cameraState === "unavailable" ? "Camera is unavailable" : "Camera access is needed"}</strong><span>{cameraState === "failed" ? "Check your connection and try again. If the issue continues, reopen the hunt in your phone's browser." : cameraState === "unavailable" ? "Open the hunt in your phone's browser using the secure website link." : "Allow camera access in your browser settings, then try again."}</span><button onClick={startCamera}>Try again</button></div>}
         {adminDiagnostics && <VisionDebug getSource={getVisionSource} diagnostics={diagnosticsRef} cameraState={cameraState} provider={tracking?.provider} />}
       </div>
       <button className="capture-button" disabled={cameraState !== "ready"} onClick={takeCapture}><Camera size={34} /> Capture</button>
-      {cameraState === "calibrating" && !adminDiagnostics && <div className="spatial-preflight"><LoaderCircle className="spin" size={30} /><strong>Preparing the hunt…</strong><span>Checking camera and spatial tracking.</span></div>}
+      {tracking?.provider === "8thwall" && (cameraState === "starting" || cameraState === "calibrating") && !adminDiagnostics && <div className="spatial-preflight"><LoaderCircle className="spin" size={30} /><strong>Preparing the hunt…</strong><span>Checking camera and spatial tracking.</span></div>}
       {capturedUrl && (
         <div className="capture-modal" role="dialog" aria-modal="true" aria-label="Your capture">
           {/* eslint-disable-next-line @next/next/no-img-element */}
