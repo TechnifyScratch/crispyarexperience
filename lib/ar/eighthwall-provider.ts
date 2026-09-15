@@ -3,6 +3,7 @@ import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { TransformControls } from "three/examples/jsm/controls/TransformControls.js";
 import type { ImagePlacement, SpatialAnchor } from "@/lib/ar/mindar-provider";
 import type { LocalizationDiagnostics } from "@/lib/ar/diagnostics";
+import { selectHorizontalSupportPlane, StableWorldPointStore, type SpatialPoint, type SupportPlane } from "@/lib/ar/surface-reasoning";
 
 type Vec3 = { x: number; y: number; z: number };
 type Quat = { x: number; y: number; z: number; w: number };
@@ -14,9 +15,9 @@ type ImageEvent = {
   scaledWidth?: number;
   scaledHeight?: number;
 };
-type WorldPoint = { id: number; confidence: number; position: Vec3 };
+type WorldPoint = SpatialPoint;
+type HorizontalPlane = SupportPlane;
 type TimedWorldPoint = { point: WorldPoint; seenAt: number };
-type HorizontalPlane = { y: number; sampleCount: number; deviation: number; spreadX: number; spreadZ: number; confidence: number };
 type LocalizationCandidate = {
   name: string;
   position: THREE.Vector3;
@@ -170,7 +171,10 @@ function cameraYaw(rotation?: Quat) {
   return Math.atan2(-forward.x, -forward.z);
 }
 
-function horizontalPlaneNear(worldPoints: WorldPoint[], expected: THREE.Vector3, radius = 0.48, verticalTolerance = 0.32): HorizontalPlane | null {
+// Keep the established admin placement behavior unchanged. The stricter
+// footprint verification below is player-only and must not make a known-good
+// setup flow harder to operate.
+function adminHorizontalPlaneNear(worldPoints: WorldPoint[], expected: THREE.Vector3, radius = 0.48, verticalTolerance = 0.32): HorizontalPlane | null {
   const nearby = worldPoints.filter((point) => {
     if (point.confidence <= 0) return false;
     const dx = point.position.x - expected.x;
@@ -196,14 +200,18 @@ function horizontalPlaneNear(worldPoints: WorldPoint[], expected: THREE.Vector3,
     const spreadX = Math.max(...xs) - Math.min(...xs);
     const spreadZ = Math.max(...zs) - Math.min(...zs);
     if (deviation > 0.018 || spreadX < 0.11 || spreadZ < 0.075) continue;
-    const coverage = Math.min(1, (spreadX * spreadZ) / 0.035);
+    const footprintArea = spreadX * spreadZ;
+    const coverage = Math.min(1, footprintArea / 0.035);
     const density = Math.min(1, inliers.length / 24);
     const flatness = Math.max(0, 1 - deviation / 0.018);
     const confidence = coverage * 0.35 + density * 0.35 + flatness * 0.3;
     const score = Math.abs(meanY - expected.y) + deviation * 4 - confidence * 0.045;
-    if (!best || score < best.score) best = { y: meanY, sampleCount: inliers.length, deviation, spreadX, spreadZ, confidence, score };
+    if (!best || score < best.score) best = { y: meanY, sampleCount: inliers.length, deviation, spreadX, spreadZ, footprintArea, minorSpread: Math.min(spreadX, spreadZ), confidence, score };
   }
-  return best;
+  if (!best) return null;
+  const { score: _score, ...plane } = best;
+  void _score;
+  return plane;
 }
 
 async function mount(options: {
@@ -227,7 +235,8 @@ async function mount(options: {
   let scene: THREE.Scene | null = null;
   let camera: THREE.PerspectiveCamera | null = null;
   let points: WorldPoint[] = [];
-  const pointHistory = new Map<number, TimedWorldPoint>();
+  const stablePointHistory = new StableWorldPointStore();
+  const adminPointHistory = new Map<number, TimedWorldPoint>();
   let targetMatrix: THREE.Matrix4 | null = null;
   const targetMatrices = new Map<string, THREE.Matrix4>();
   const targetDefinitions = [...(options.targets ?? [])];
@@ -332,7 +341,7 @@ async function mount(options: {
     // Score only local, flat, well-covered planes near the intended hiding
     // point. The wider vertical window corrects image-anchor scale drift while
     // remaining too small to jump from a counter down to the floor.
-    const support = horizontalPlaneNear(points, expectedSupport, 0.52, 0.26);
+    const support = selectHorizontalSupportPlane(points, expectedSupport, 0.52, 0.26);
     const tolerance = Math.max(surface?.toleranceM ?? 0.1, 0.22);
     surfaceConfidence = support?.confidence ?? null;
     surfaceErrorM = support ? Math.abs(support.y - expectedSupport.y) : null;
@@ -590,7 +599,7 @@ async function mount(options: {
           surfaceErrorM = null;
           placementFinalized = false;
           surfaceDecisionDeadline = 0;
-          pointHistory.clear();
+          stablePointHistory.clear();
           points = [];
           visibleTargets.clear();
           resetCandidate();
@@ -604,9 +613,13 @@ async function mount(options: {
         confirmCandidate();
       }
       const pointTime = performance.now();
-      for (const point of reality.worldPoints ?? []) pointHistory.set(point.id, { point, seenAt: pointTime });
-      for (const [id, stored] of pointHistory) if (pointTime - stored.seenAt > 1800) pointHistory.delete(id);
-      points = [...pointHistory.values()].map((stored) => stored.point);
+      if (options.admin) {
+        for (const point of reality.worldPoints ?? []) adminPointHistory.set(point.id, { point, seenAt: pointTime });
+        for (const [id, stored] of adminPointHistory) if (pointTime - stored.seenAt > 1800) adminPointHistory.delete(id);
+        points = [...adminPointHistory.values()].map((stored) => stored.point);
+      } else {
+        points = stablePointHistory.update(reality.worldPoints ?? [], pointTime);
+      }
       settleCraigOnSurface();
       if (options.onDiagnostics) {
         diagnosticFrames += 1;
@@ -769,12 +782,12 @@ async function mount(options: {
           const distance = (approximateY - ray.ray.origin.y) / ray.ray.direction.y;
           if (distance < 0.15 || distance > 8) continue;
           const approximateHit = ray.ray.at(distance, new THREE.Vector3());
-          const plane = horizontalPlaneNear(points, approximateHit, 0.5, 0.18);
+          const plane = adminHorizontalPlaneNear(points, approximateHit, 0.5, 0.18);
           if (!plane || plane.confidence < 0.64 || Math.abs(plane.y - approximateY) > 0.1) continue;
           const exactDistance = (plane.y - ray.ray.origin.y) / ray.ray.direction.y;
           if (exactDistance < 0.15 || exactDistance > 8) continue;
           const exactHit = ray.ray.at(exactDistance, new THREE.Vector3());
-          const exactPlane = horizontalPlaneNear(points, exactHit, 0.42, 0.13);
+          const exactPlane = adminHorizontalPlaneNear(points, exactHit, 0.42, 0.13);
           if (!exactPlane || exactPlane.confidence < 0.64) continue;
           const score = exactDistance - exactPlane.confidence * 0.08;
           if (!best || score < best.score) best = { point: exactHit, plane: exactPlane, score };

@@ -13,6 +13,8 @@ function load(file, mocks = {}) {
   return loaded.exports;
 }
 const { ObjectTracker, coverPoint, createPatch, followPatch, distanceToBox } = load('lib/ar/object-tracking.ts');
+const surfaceReasoning = load('lib/ar/surface-reasoning.ts');
+const { StableWorldPointStore, selectHorizontalSupportPlane } = surfaceReasoning;
 const detection = (x, label = 'cup') => ({ label, score: 0.9, box: { x, y: 0.25, width: 0.15, height: 0.2 } });
 
 test('two identical categories keep separate IDs and follow small movements', () => {
@@ -58,6 +60,71 @@ test('a custom labelled package follows translation and disappears when its text
   assert.ok(Math.abs(result.box.x - 0.265) < 0.01);
   assert.equal(followPatch({ data: new Uint8Array(width * height).fill(100), width, height }, patch), null);
   assert.equal(createPatch({ data: new Uint8Array(width * height).fill(100), width, height }, patch.box, 'Blank wall'), null);
+});
+
+test('surface reasoning accepts a stable floor footprint under Craig', () => {
+  const points = [];
+  let id = 0;
+  for (let x = -0.2; x <= 0.2; x += 0.05) {
+    for (let z = -0.2; z <= 0.2; z += 0.05) points.push({ id: id++, confidence: 1, position: { x, y: (id % 3 - 1) * 0.002, z } });
+  }
+  const plane = selectHorizontalSupportPlane(points, { x: 0, y: 0.12, z: 0 }, 0.5, 0.3);
+  assert.ok(plane);
+  assert.ok(Math.abs(plane.y) < 0.005);
+  assert.ok(plane.footprintArea > 0.1);
+});
+
+test('surface reasoning rejects a same-height slice through a vertical cabinet', () => {
+  const points = [];
+  let id = 0;
+  for (let y = -0.25; y <= 0.25; y += 0.025) {
+    for (let z = -0.3; z <= 0.3; z += 0.04) points.push({ id: id++, confidence: 1, position: { x: 0.04 + (id % 2) * 0.002, y, z } });
+  }
+  assert.equal(selectHorizontalSupportPlane(points, { x: 0.04, y: 0.12, z: 0 }, 0.5, 0.3), null);
+});
+
+test('surface reasoning chooses the real floor instead of a closer cabinet slice', () => {
+  const points = [];
+  let id = 0;
+  for (let x = -0.24; x <= 0.24; x += 0.04) {
+    for (let z = -0.24; z <= 0.24; z += 0.04) points.push({ id: id++, confidence: 1, position: { x, y: 0, z } });
+  }
+  for (let y = 0.04; y <= 0.28; y += 0.02) {
+    for (let z = -0.28; z <= 0.28; z += 0.035) points.push({ id: id++, confidence: 1, position: { x: 0.035, y, z } });
+  }
+  const plane = selectHorizontalSupportPlane(points, { x: 0, y: 0.14, z: 0 }, 0.5, 0.3);
+  assert.ok(plane);
+  assert.ok(Math.abs(plane.y) < 0.005);
+});
+
+test('surface reasoning rejects a flat surface that does not extend beneath Craig', () => {
+  const points = [];
+  let id = 0;
+  for (let x = 0.22; x <= 0.55; x += 0.04) {
+    for (let z = -0.2; z <= 0.2; z += 0.04) points.push({ id: id++, confidence: 1, position: { x, y: 0, z } });
+  }
+  assert.equal(selectHorizontalSupportPlane(points, { x: 0, y: 0.12, z: 0 }, 0.6, 0.3), null);
+});
+
+test('surface reasoning rejects room-edge points whose convex hull merely surrounds Craig', () => {
+  const points = [];
+  let id = 0;
+  for (let amount = -0.35; amount <= 0.35; amount += 0.035) {
+    points.push({ id: id++, confidence: 1, position: { x: -0.3, y: 0.14, z: amount } });
+    points.push({ id: id++, confidence: 1, position: { x: 0.3, y: 0.14, z: amount } });
+    points.push({ id: id++, confidence: 1, position: { x: amount, y: 0.14, z: -0.3 } });
+    points.push({ id: id++, confidence: 1, position: { x: amount, y: 0.14, z: 0.3 } });
+  }
+  assert.equal(selectHorizontalSupportPlane(points, { x: 0, y: 0.14, z: 0 }, 0.6, 0.2), null);
+});
+
+test('moving feature points never become eligible support geometry', () => {
+  const store = new StableWorldPointStore();
+  const frame = (shift) => Array.from({ length: 16 }, (_, id) => ({ id, confidence: 1, position: { x: (id % 4) * 0.05 + shift, y: 0, z: Math.floor(id / 4) * 0.05 } }));
+  assert.equal(store.update(frame(0), 0).length, 0);
+  for (let index = 1; index <= 8; index += 1) assert.equal(store.update(frame(index * 0.008), index * 50).length, 0);
+  for (let index = 9; index <= 15; index += 1) store.update(frame(0.064), index * 50);
+  assert.equal(store.update(frame(0.064), 800).length, 16);
 });
 
 async function play({ configured = true, user = { id: 'user' }, role = null } = {}) {
@@ -114,6 +181,7 @@ test('spatial diagnostics report reference stability, pose resets and failed sur
   let mounted;
   try {
     const { mountEighthWallHunt } = load('lib/ar/eighthwall-provider.ts', {
+      '@/lib/ar/surface-reasoning': surfaceReasoning,
       'three/examples/jsm/loaders/GLTFLoader.js': { GLTFLoader: class { async loadAsync() { return { scene: new THREE.Mesh(new THREE.BoxGeometry(), new THREE.MeshBasicMaterial()) }; } } },
       'three/examples/jsm/controls/TransformControls.js': { TransformControls: class {} },
     });
